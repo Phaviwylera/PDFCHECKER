@@ -86,6 +86,13 @@ src/app.html               The page; scripts/build-page.mjs turns it into public
 test/                      Smoke test and fixtures (a fictional bank's statement and tampered copies)
 ```
 
+## Security notes
+
+- PDFs are parsed with pdf.js 3.11.174 and `isEvalSupported: false`. That setting is the documented mitigation for the pdf.js font-eval advisory (GHSA-wgrm-67xf-hhpq), so `npm audit` still lists the package. The page-content checks depend on this version's internal drawing-command format; test them before upgrading pdf.js.
+- `.npmrc` skips optional packages, so pdf.js's `canvas` add-on, which this app never uses, is not installed.
+- Uploads are limited to 25 MB, must start with `%PDF-`, and are checked at most two at a time with a time limit.
+- The server sends a strict Content-Security-Policy. The page loads nothing from other sites except Google Fonts.
+
 ## Limits
 
 These checks are evidence, not proof. Edits made to a scanned image, or before a statement was printed to PDF, leave no trace in the file. A forger who rebuilds a statement from scratch with correct fonts and balances can pass. For lending decisions, prefer statements fetched directly from the bank (for example through India's Account Aggregator framework), and treat this check as a filter in front of that.
