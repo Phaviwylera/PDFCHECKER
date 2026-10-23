@@ -19,7 +19,7 @@ const expect = {
   'retyped-amount.pdf': { status: 422, codes: ['TEXT_REPLACED', 'EDITING_SOFTWARE', 'BALANCE_MISMATCH'] },
   'signed-then-altered.pdf': { status: 422, codes: ['SIGNATURE_BROKEN'] },
   // decrypted, edited in a content editor, re-encrypted with AES-256 and balanced (see test/make-reencrypted-fixture.py)
-  'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT'],
+  'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED'],
     editMap: { now: '1,85,000.00', digits: 5 } }
 };
 let failed = 0;

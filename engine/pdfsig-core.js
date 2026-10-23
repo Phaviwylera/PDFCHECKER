@@ -1666,6 +1666,7 @@ function textOpsDetailed(data, fonts) {
   const stack = [];
   const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
   let ctm = [1, 0, 0, 1, 0, 0]; const ctmStack = [];
+  let clips = 0, pendingClip = false, images = 0; const clipStack = [];
   let tm = [1, 0, 0, 1, 0, 0], tlm = [1, 0, 0, 1, 0, 0];
   let fontKey = null, font = null, size = 0, TL = 0, Tc = 0, Tw = 0, Tz = 100;
   let i = 0; const n = t.length;
@@ -1683,7 +1684,7 @@ function textOpsDetailed(data, fonts) {
     const hs = Tz / 100;
     const sx = Math.hypot(m[0], m[1]);
     ops.push({ fontKey, baseFont: font ? font.baseFont : null, fontRef: font ? font.ref : null, size: +(size * Math.abs(tm[3] || 1)).toFixed(3),
-      x: +m[4].toFixed(2), y: +m[5].toFixed(2), hscale: +(tm[0] * hs).toFixed(7), text, glyphs, adjust, width: +(adv * hs * sx).toFixed(2), kind });
+      x: +m[4].toFixed(2), y: +m[5].toFixed(2), hscale: +(tm[0] * hs).toFixed(7), text, glyphs, adjust, width: +(adv * hs * sx).toFixed(2), kind, clipped: clips > 0, imagesBefore: images, seq: ops.length });
     tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + adv * hs * tm[0], tm[5] + adv * hs * tm[1]];
   };
   while (i < n) {
@@ -1703,8 +1704,11 @@ function textOpsDetailed(data, fonts) {
     const last = (k) => nums.slice(-k);
     switch (tok) {
       case 'BI': { const e = t.indexOf('EI', i); i = e < 0 ? n : e + 2; break; }
-      case 'q': ctmStack.push(ctm); break;
-      case 'Q': ctm = ctmStack.pop() || [1, 0, 0, 1, 0, 0]; break;
+      case 'q': ctmStack.push(ctm); clipStack.push(clips); break;
+      case 'Q': ctm = ctmStack.pop() || [1, 0, 0, 1, 0, 0]; clips = clipStack.length ? clipStack.pop() : 0; break;
+      case 'W': case 'W*': pendingClip = true; break;
+      case 'n': case 'f': case 'F': case 'f*': case 'S': case 's': case 'B': case 'B*': case 'b': case 'b*': if (pendingClip) { clips++; pendingClip = false; } break;
+      case 'Do': images++; break;
       case 'cm': if (nums.length >= 6) ctm = mul(last(6), ctm); break;
       case 'BT': tm = [1, 0, 0, 1, 0, 0]; tlm = tm; break;
       case 'Tm': if (nums.length >= 6) { tm = last(6); tlm = tm; } break;
@@ -1795,6 +1799,7 @@ async function buildEditMap(scan, pages, isEditorKey) {
   const fontsById = new Map();
   const edits = [];
   const allRows = [];
+  const layers = [];
   for (let pi = 0; pi < pages.length; pi++) {
     const p = pages[pi];
     let fonts;
@@ -1860,6 +1865,17 @@ async function buildEditMap(scan, pages, isEditorKey) {
         shift: a ? { left: +(a.x - bL).toFixed(2), right: +(a.x + a.width - bR).toFixed(2), width: +(a.width - b.width).toFixed(2), baseline: +(a.y - b.y).toFixed(3) } : null
       });
     }
+    // drawing layer: does the editor's text sit where the bank's text sits?
+    {
+      const bank = ops.filter((o) => o.kind === 'text' && !isEditorKey(o.fontKey));
+      const bankClipped = bank.filter((o) => o.clipped).length / Math.max(1, bank.length);
+      const lastBank = bank.length ? Math.max(...bank.map((o) => o.seq)) : -1;
+      const maxImgBeforeBank = bank.length ? Math.max(...bank.map((o) => o.imagesBefore)) : 0;
+      if (added.length) layers.push({ page: pi + 1, bankText: bank.length, bankClippedShare: +bankClipped.toFixed(3), editorText: added.length,
+        editorUnclipped: added.filter((o) => !o.clipped).length, editorAfterBank: added.filter((o) => o.seq > lastBank).length,
+        editorOverImages: added.filter((o) => o.imagesBefore > maxImgBeforeBank).length,
+        squeezed: added.filter((o) => Math.abs(o.hscale - 1) > 1e-6).length });
+    }
     // table rows on this page, for the balance chain
     {
       const cellOps = ops.filter((o) => o.kind === 'blank' || (o.kind === 'text' && o.text.trim()));
@@ -1903,7 +1919,18 @@ async function buildEditMap(scan, pages, isEditorKey) {
     return { baseFont: f.baseFont, subtype: f.subtype, fractionalWidths: f.fractionalWidths, names: [...f.names].sort(), pages: [...f.pages].sort((a, b) => a - b), runs: f.runs, editorRuns: f.editorRuns,
       origin: addedByEditor ? 'added' : editorNames.length ? 'original, re-registered by the editor' : 'original', editorNames: editorNames.length };
   });
-  return { fonts, edits: edits.sort((a, b) => a.page - b.page || b.y - a.y) };
+  // money pattern: how much the edited amounts moved
+  const amountEdits = edits.filter((e) => e.role === 'amount' && e.after && e.before && e.before.derived);
+  const shownOf = (e) => { const m = /^([\d,]+)\.(\d\d)\s?\(?(Cr|Dr|CR|DR|cr|dr)?\)?$/.exec(e.after.text.trim()); if (!m) return null; const v = parseFloat(m[1].replace(/,/g, '') + '.' + m[2]); return /dr/i.test(m[3] || '') ? -v : v; };
+  const money = { creditsShown: 0, creditsOriginalMax: 0, debitsShown: 0, debitsOriginalMax: 0, credits: 0, debits: 0 };
+  for (const e of amountEdits) {
+    const v = shownOf(e); if (v == null) continue;
+    const d = e.before.derived;
+    if (v > 0) { money.credits++; money.creditsShown += v; money.creditsOriginalMax += Math.max(0, d.hi); }
+    else { money.debits++; money.debitsShown += -v; money.debitsOriginalMax += Math.max(0, -d.lo); }
+  }
+  for (const k of Object.keys(money)) money[k] = Math.round(money[k] * 100) / 100;
+  return { fonts, edits: edits.sort((a, b) => a.page - b.page || b.y - a.y), layers, money };
 }
 
 /* Tokenises a content stream and returns text runs in drawing order. */
@@ -2351,9 +2378,14 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
     if (srcVer) bits.push(`the original was PDF ${srcVer.toFixed(1)}${hdrVer && Math.abs(hdrVer - srcVer) > 0.01 ? `, this file is PDF ${Math.max(hdrVer, catVer || 0).toFixed(1)}` : ''}`);
     if (srcSize) bits.push(`the original was ${srcSize.toLocaleString('en-US')} bytes, this file is ${bytes.length.toLocaleString('en-US')} bytes`);
     if (wasEnc && wasDec) bits.push('the original was encrypted and was decrypted before being re-saved');
+    const srcSha256 = (await infoStr('SourceSHA256') || '').trim().toLowerCase() || null;
+    const srcSha1 = (await infoStr('SourceSHA1') || '').trim().toLowerCase() || null;
+    const srcName = await infoStr('SourceFilename');
+    if (srcSha256) bits.push(`the original’s SHA-256 fingerprint is ${srcSha256}, so the bank’s genuine file can be matched exactly by hashing it`);
     add({ code: 'REWRITTEN_FROM_SOURCE', severity: 'high', category: 'structure', title: 'This file is a re-saved copy of another PDF',
       detail: `The document info contains ${sourceKeys.length} fields that a conversion tool writes about the file it started from (${sourceKeys.slice(0, 4).join(', ')}${sourceKeys.length > 4 ? '…' : ''}). Bank systems do not write these. ${bits.length ? 'They show that ' + bits.join('; ') + '.' : ''}`,
-      evidence: { keys: sourceKeys, sourceVersion: srcVer, sourceBytes: srcSize, bytes: bytes.length, sourcePages: srcPages, sourceEncrypted: wasEnc, sourceDecrypted: wasDec } });
+      evidence: { keys: sourceKeys, sourceVersion: srcVer, sourceBytes: srcSize, bytes: bytes.length, sourcePages: srcPages, sourceEncrypted: wasEnc, sourceDecrypted: wasDec,
+        sourceSHA256: srcSha256, sourceSHA1: srcSha1, sourceFilename: srcName } });
   }
   if (catVer && hdrVer && catVer > hdrVer + 0.01) add({ code: 'VERSION_RAISED', severity: 'low', category: 'structure', title: `PDF version raised from ${hdrVer.toFixed(1)} to ${catVer.toFixed(1)}`,
     detail: 'The catalog overrides the version in the file header. Tools do this when they re-save a file with features the original version did not support.' });
@@ -2434,6 +2466,31 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
     title: `Text rewritten with an editor on page${editorKeyPages.length > 1 ? 's' : ''} ${pl(editorKeyPages)}`,
     detail: `${editorKeys} font resources carry names a PDF content editor gives to text it rewrites (${editorKeyPages[0].keys.slice(0, 3).join(', ')}…). The bank’s generator never uses these names.${rewritten.length ? ` Text written with them includes: ${rewritten.filter((r) => /\d\.\d\d/.test(r.text)).slice(0, 6).map((r) => `“${r.text}” (page ${r.page})`).join(', ')}.` : ''}`,
     evidence: { pages: editorKeyPages.map((x) => x.page + 1), resources: editorKeys, rewritten: rewritten.slice(0, 80) } });
+  const em = info.editMap && !info.editMap.error ? info.editMap : null;
+  if (em && em.layers && em.layers.length) {
+    const L = em.layers;
+    const outside = L.filter((l) => l.bankClippedShare >= 0.9 && l.editorUnclipped > 0);
+    const over = L.filter((l) => l.editorOverImages > 0);
+    const late = L.filter((l) => l.editorAfterBank > 0);
+    const sq = L.reduce((a, l) => a + l.squeezed, 0);
+    const bits = [];
+    if (late.length) bits.push(`${late.reduce((a, l) => a + l.editorAfterBank, 0)} pieces are drawn after all of the bank’s text on their page, as a separate layer`);
+    if (outside.length) bits.push(`${outside.reduce((a, l) => a + l.editorUnclipped, 0)} sit outside the clipping area that holds ${Math.round(Math.min(...outside.map((l) => l.bankClippedShare)) * 100)}% or more of the bank’s text`);
+    if (over.length) bits.push(`${over.reduce((a, l) => a + l.editorOverImages, 0)} are painted on top of the page’s watermark or images, while the bank’s text lies beneath them`);
+    if (sq) bits.push(`${sq} are squeezed horizontally (for example to ${(L.length && em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6) ? (em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6).after.hscale * 100).toFixed(4) : '')}%) to fit the space`);
+    if (bits.length) add({ code: 'TEXT_ON_SEPARATE_LAYER', severity: 'high', category: 'content', page: L[0].page - 1,
+      title: `Retyped text drawn on top of the page on page${L.length > 1 ? 's' : ''} ${L.map((l) => l.page).join(', ')}`,
+      detail: `The bank draws all of its text in one pass inside its table. Of the editor’s text: ${bits.join('; ')}.`,
+      evidence: { pages: L } });
+  }
+  if (em && em.money && (em.money.credits || em.money.debits)) {
+    const M = em.money;
+    const r = (v) => '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    add({ code: 'AMOUNTS_INFLATED', severity: 'high', category: 'content', page: null,
+      title: `Edited amounts: ${M.credits} credit${M.credits === 1 ? '' : 's'} now total ${r(M.creditsShown)}, originally at most ${r(M.creditsOriginalMax)}`,
+      detail: `Working the running balance through the untouched rows shows what the edited rows held before. Credits now shown: ${r(M.creditsShown)} (originally at most ${r(M.creditsOriginalMax)}). ${M.debits ? `Debits now shown: ${r(M.debitsShown)} (originally at most ${r(M.debitsOriginalMax)}). Inflating debits by about the same amount as credits is what keeps every balance adding up.` : ''}`,
+      evidence: M });
+  }
   if (aliasCount && !editorKeys) add({ code: 'FONT_ALIASES', severity: 'medium', category: 'structure', page: aliasPages[0].page,
     title: `Same font registered under extra names on page${aliasPages.length > 1 ? 's' : ''} ${pl(aliasPages)}`,
     detail: `The page refers to one font under several names (${aliasPages[0].groups[0].join(', ')}). Generators name each font once; editors add a new name each time they rewrite a piece of text.` });
@@ -2474,7 +2531,7 @@ const CHECK_DEFS = [
   ['math', 'Running balance and totals', ['BALANCE_MISMATCH', 'CLOSING_MISMATCH', 'TOTAL_MISMATCH']],
   ['overlay', 'Annotations and form fields', ['TEXT_ANNOTATION', 'MARKUP_ANNOTATION', 'FORM_FIELD_VALUE']],
   ['scan', 'Real text, not a scanned image', ['SCANNED', 'NO_TEXT']],
-  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'FONT_ALIASES']],
+  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'FONT_ALIASES', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED']],
   ['encryption', 'Encryption and re-saving', ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'ENCRYPTION_VERSION_MISMATCH', 'ENCRYPTION_NO_OWNER_LOCK', 'VERSION_RAISED']],
   ['active', 'Scripts and attachments', ['JAVASCRIPT', 'LAUNCH_ACTION', 'EMBEDDED_FILES', 'XFA_FORM']]
 ];
