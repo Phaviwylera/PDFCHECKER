@@ -2,7 +2,7 @@
 (function (global) {
 'use strict';
 
-const MONEY_RE = /^\(?[-−]?(?:₹|Rs\.?|INR|\$|€|£)?\s?(\d{1,3}(?:,\d{2,3})+|\d+)\.(\d{2})\)?(-)?\s?(Cr|CR|Dr|DR|cr|dr)?$/;
+const MONEY_RE = /^\(?[-−]?(?:₹|Rs\.?|INR|\$|€|£)?\s?(\d{1,3}(?:,\d{2,3})+|\d+)\.(\d{2})\)?(-)?\s?\(?(Cr|CR|Dr|DR|cr|dr)?\.?\)?$/;
 const DATE_RE = /^(\d{1,2}[-/.](\d{1,2}|[A-Za-z]{3})[-/.]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3,9} \d{2,4})$/;
 const DR_HDR = /^(withdrawals?|debits?|dr\.?|paid out|debit amount|withdrawal amt\.?|money out)$/i;
 const CR_HDR = /^(deposits?|credits?|cr\.?|paid in|credit amount|deposit amt\.?|money in)$/i;

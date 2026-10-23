@@ -1014,6 +1014,22 @@ function legacyAuth(e, pw) {
   if (legacyCheckUser(e, key)) return { key, who: 'owner' };
   return null;
 }
+/* True when pw is also the owner (permissions) password, i.e. the file has one password for opening and editing. */
+async function passwordIsOwner(e, pw) {
+  try {
+    if (e.R >= 5) {
+      const pb = new TextEncoder().encode(pw.normalize('NFKC')).subarray(0, 127);
+      return equalBytes(await hash2B(pb, e.O.subarray(32, 40), e.U.subarray(0, 48), e.R), e.O.subarray(0, 32));
+    }
+    let h = md5(padPw(pwBytesLegacy(pw)));
+    if (e.R >= 3) for (let i = 0; i < 50; i++) h = md5(h);
+    const ok = h.subarray(0, e.R === 2 ? 5 : e.keyLen);
+    let u = e.O.subarray(0, 32);
+    if (e.R === 2) u = rc4(ok, u);
+    else for (let i = 19; i >= 0; i--) u = rc4(ok.map((b) => b ^ i), u);
+    return legacyCheckUser(e, legacyFileKey(e, u));
+  } catch { return false; }
+}
 async function hash2B(pw, salt, udata, R) {
   let K = await digest('SHA-256', concatBytes(pw, salt, udata));
   if (R === 5) return K;
@@ -1078,7 +1094,9 @@ async function openEncryption(bytes, text, password) {
     if (password == null || password === '') res = await auth('');
     else res = await auth(password);
   } catch (err) { res = null; }
-  const info = { supported: true, filter, V, R, method, label, permissions: e.P, key: res ? res.key : null, unlocked: res ? res.who : null, encryptMetadata: e.encryptMetadata,
+  const sharedOwner = !!res && password != null && password !== '' && (res.who === 'owner' || await passwordIsOwner(e, password));
+  const info = { supported: true, filter, V, R, method, label, permissions: e.P, key: res ? res.key : null, unlocked: res ? res.who : null, encryptMetadata: e.encryptMetadata, sharedOwner,
+    ownerOnlyEmpty: !!res && (password == null || password === '') && res.who === 'owner',
     emptyPassword: !!res && (password == null || password === ''), needsPassword: !res, wrongPassword: !res && password != null && password !== '' };
   return info;
 }
@@ -1387,7 +1405,8 @@ async function validatePDF(bytes, opts = {}) {
   for (const s of sigs) await resolveSigText(s, encryption, encrypted);
   const encInfo = encryption ? { supported: encryption.supported, label: encryption.label || null, R: encryption.R || null, unlocked: encryption.unlocked || null,
     emptyPassword: !!encryption.emptyPassword, needsPassword: !!encryption.needsPassword, wrongPassword: !!encryption.wrongPassword, reason: encryption.reason || null,
-    permissions: encryption.permissions == null ? null : encryption.permissions } : null;
+    permissions: encryption.permissions == null ? null : encryption.permissions, V: encryption.V || null, method: encryption.method || null,
+    sharedOwner: !!encryption.sharedOwner } : null;
   const out = { fileSize: bytes.length, sha256: toHex(await digest('SHA-256', bytes)), revisions, hasDSS: ctx.hasDSS, encrypted, encryption: encInfo, signatures: [] };
   for (let i = 0; i < sigs.length; i++) out.signatures.push(await validateOne(bytes, sigs[i], i, sigs, ctx));
   if (opts.forensics !== false) {
@@ -1617,11 +1636,11 @@ function decodeShown(bytesStr, font) {
   return s;
 }
 /* Tokenises a content stream and returns text runs in drawing order. */
-function contentTextRuns(data, fonts) {
+function contentTextRuns(data, fonts, withFont) {
   const t = latin1(data);
   const runs = [];
   const stack = [];
-  let font = null;
+  let font = null, fontKey = null;
   let i = 0;
   const n = t.length;
   const isDelim = (c) => /[\s()<>[\]{}/%]/.test(c);
@@ -1646,18 +1665,19 @@ function contentTextRuns(data, fonts) {
     if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(tok)) { stack.push({ num: +tok }); continue; }
     // operator
     if (tok === 'BI') { const e = t.indexOf('EI', i); i = e < 0 ? n : e + 2; stack.length = 0; continue; }
-    if (tok === 'Tf') { const nm = stack[stack.length - 2]; font = nm && nm.name ? fonts.get(nm.name) || null : null; }
-    else if (tok === 'Tj' || tok === "'" || tok === '"') { const s = stack[stack.length - 1]; if (s && s.str) runs.push(decodeShown(s.str, font)); }
+    if (tok === 'Tf') { const nm = stack[stack.length - 2]; font = nm && nm.name ? fonts.get(nm.name) || null : null; fontKey = nm && nm.name; }
+    else if (tok === 'Tj' || tok === "'" || tok === '"') { const s = stack[stack.length - 1]; if (s && s.str) runs.push(withFont ? { text: decodeShown(s.str, font), font: fontKey } : decodeShown(s.str, font)); }
     else if (tok === 'TJ') {
       const a = stack[stack.length - 1];
       if (a && a.arr) {
         let s = '';
         for (const e of a.arr) { if (e.str) s += decodeShown(e.str, font); else if (e.num !== undefined && e.num < -180) s += ' '; }
-        runs.push(s);
+        runs.push(withFont ? { text: s, font: fontKey } : s);
       }
     }
     stack.length = 0;
   }
+  if (withFont) return runs.map((r) => ({ ...r, text: r.text.replace(/\s+/g, ' ').trim() })).filter((r) => r.text);
   return runs.map((r) => r.replace(/\s+/g, ' ').trim()).filter(Boolean);
 }
 async function pageTextAt(scan, page, rev) {
@@ -2016,19 +2036,136 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
   };
   const pageFonts = pagesNow.map(fontNamesOnPage);
   info.fonts = [...new Set(pageFonts.flat().map((f) => f.base))];
+  const dupHits = [];
   pageFonts.forEach((list, pi) => {
     const byFam = new Map();
     for (const f of list) {
       const tag = /^([A-Z]{6})\+/.exec(f.base);
       if (!tag) continue;
-      const fam = f.base.slice(7);
-      const s = byFam.get(fam) || new Set(); s.add(tag[1]); byFam.set(fam, s);
+      // editors often re-embed a font as "ArialMT-7098" next to the original "ArialMT"
+      const fam = f.base.slice(7).replace(/[-_]\d{2,}$/, '');
+      const s = byFam.get(fam) || new Set(); s.add(f.base); byFam.set(fam, s);
     }
-    for (const [fam, tags] of byFam) if (tags.size > 1) {
-      add({ code: 'DUPLICATE_FONT_SUBSET', severity: 'high', category: 'structure', page: pi, title: `Two separate copies of ${fam} on page ${pi + 1}`,
-        detail: `The page embeds ${[...tags].map((t) => t + '+' + fam).join(' and ')}. A generator writes one copy per typeface; a second copy appears when another program adds text in the “same” font.` });
-    }
+    for (const [fam, names] of byFam) if (names.size > 1) dupHits.push({ page: pi, fam, names: [...names] });
   });
+  for (const fam of [...new Set(dupHits.map((h) => h.fam))]) {
+    const hits = dupHits.filter((h) => h.fam === fam);
+    const pages = hits.map((h) => h.page + 1);
+    add({ code: 'DUPLICATE_FONT_SUBSET', severity: 'high', category: 'structure', page: hits[0].page,
+      title: `Two separate copies of ${fam} on page${pages.length > 1 ? 's' : ''} ${pages.join(', ')}`,
+      detail: `${pages.length > 1 ? 'These pages embed' : 'The page embeds'} ${hits[0].names.join(' and ')}. A generator writes one copy per typeface; a second copy appears when another program adds text in the “same” font.`,
+      evidence: { fonts: hits[0].names, pages } });
+  }
+
+  // ---- copy of another PDF: converters that decrypt and re-save record the source
+  const hdrVer = parseFloat((/%PDF-(\d\.\d)/.exec(text.slice(0, 1024)) || [])[1]) || null;
+  const catVer = root && root.Version ? parseFloat(String(root.Version).replace(/^\//, '')) || null : null;
+  const rawInfo = infoDef && infoDef.value && typeof infoDef.value === 'object' && !Array.isArray(infoDef.value) ? infoDef.value : {};
+  const infoStr = async (k) => {
+    const v = rawInfo[k];
+    const raw = strOf(v);
+    if (!raw) return v == null ? null : String(v);
+    let b = raw;
+    if (enc && !infoDef.inObjStm) b = enc.key ? await decryptString(enc, [infoDef.num, infoDef.gen], raw) : null;
+    return b ? bytesToPdfText(b) : null;
+  };
+  const sourceKeys = Object.keys(rawInfo).filter((k) => /^Source[A-Z]/.test(k));
+  let srcVer = null;
+  if (sourceKeys.length) {
+    srcVer = parseFloat(await infoStr('SourcePDFVersion')) || null;
+    const srcSize = Number(rawInfo.SourceFileSizeBytes) || null;
+    const srcPages = Number(rawInfo.SourcePageCount) || null;
+    const wasEnc = String(rawInfo.SourceEncrypted) === 'true', wasDec = String(rawInfo.SourceDecrypted) === 'true';
+    const bits = [];
+    if (srcVer) bits.push(`the original was PDF ${srcVer.toFixed(1)}${hdrVer && Math.abs(hdrVer - srcVer) > 0.01 ? `, this file is PDF ${Math.max(hdrVer, catVer || 0).toFixed(1)}` : ''}`);
+    if (srcSize) bits.push(`the original was ${srcSize.toLocaleString('en-US')} bytes, this file is ${bytes.length.toLocaleString('en-US')} bytes`);
+    if (wasEnc && wasDec) bits.push('the original was encrypted and was decrypted before being re-saved');
+    add({ code: 'REWRITTEN_FROM_SOURCE', severity: 'high', category: 'structure', title: 'This file is a re-saved copy of another PDF',
+      detail: `The document info contains ${sourceKeys.length} fields that a conversion tool writes about the file it started from (${sourceKeys.slice(0, 4).join(', ')}${sourceKeys.length > 4 ? '…' : ''}). Bank systems do not write these. ${bits.length ? 'They show that ' + bits.join('; ') + '.' : ''}`,
+      evidence: { keys: sourceKeys, sourceVersion: srcVer, sourceBytes: srcSize, bytes: bytes.length, sourcePages: srcPages, sourceEncrypted: wasEnc, sourceDecrypted: wasDec } });
+  }
+  if (catVer && hdrVer && catVer > hdrVer + 0.01) add({ code: 'VERSION_RAISED', severity: 'low', category: 'structure', title: `PDF version raised from ${hdrVer.toFixed(1)} to ${catVer.toFixed(1)}`,
+    detail: 'The catalog overrides the version in the file header. Tools do this when they re-save a file with features the original version did not support.' });
+
+  // ---- encryption consistency
+  if (enc && enc.key && enc.supported) {
+    const declared = Math.max(hdrVer || 0, catVer || 0);
+    const needs = enc.method === 'AESV3' ? 1.7 : enc.method === 'AESV2' ? 1.6 : 0;
+    if (srcVer && needs && srcVer + 0.01 < needs) {
+      add({ code: 'ENCRYPTION_REPLACED', severity: 'high', category: 'security', title: `Encryption was replaced (${enc.label} on a PDF ${srcVer.toFixed(1)} original)`,
+        detail: `This copy is protected with ${enc.label}, which PDF ${srcVer.toFixed(1)} cannot use (it needs PDF ${needs.toFixed(1)} or later). The bank’s original protection was removed and new protection was applied by whoever re-saved it.`,
+        evidence: { method: enc.label, revision: enc.R, sourceVersion: srcVer } });
+    } else if (needs && declared && declared + 0.01 < needs) {
+      add({ code: 'ENCRYPTION_VERSION_MISMATCH', severity: 'medium', category: 'security', title: `${enc.label} in a file that declares PDF ${declared.toFixed(1)}`,
+        detail: `${enc.label} needs PDF ${needs.toFixed(1)} or later. The protection was probably added by a different program from the one that wrote the document.` });
+    }
+    const P = enc.permissions | 0;
+    const allPerms = [3, 4, 5, 6, 9, 10, 11, 12].every((bit) => P & (1 << (bit - 1)));
+    if (enc.sharedOwner && allPerms) {
+      add({ code: 'ENCRYPTION_NO_OWNER_LOCK', severity: 'medium', category: 'security', title: 'The opening password also unlocks editing',
+        detail: 'The password that opens the file is also its owner password, and printing, copying and editing are all allowed. Bank statements usually carry a separate owner password that blocks changes; a single password for both is typical of a file re-encrypted by a converter or editor.',
+        evidence: { revision: enc.R, method: enc.label, permissions: P } });
+    }
+  }
+
+  // ---- page-level traces of a content editor
+  const EDITOR_FONT_KEYS = [[/^PSEditFont\d+$/, 'a PDF content editor']];
+  const editorKeyPages = [], aliasPages = [], blankPages = [];
+  let editorKeys = 0, aliasCount = 0, blanks = 0, blankChars = 0;
+  for (let pi = 0; pi < pagesNow.length; pi++) {
+    const p = pagesNow[pi];
+    const r = scan.resolve(p.resources);
+    const fonts = r && scan.resolve(r.Font);
+    if (fonts && typeof fonts === 'object') {
+      const keys = Object.keys(fonts);
+      const ek = keys.filter((k) => EDITOR_FONT_KEYS.some(([re]) => re.test(k)));
+      if (ek.length) { editorKeys += ek.length; editorKeyPages.push({ page: pi, keys: ek }); }
+      const byTarget = new Map();
+      for (const k of keys) { const v = fonts[k]; const id = v && v.ref ? v.ref.join(' ') : null; if (id) byTarget.set(id, [...(byTarget.get(id) || []), k]); }
+      const al = [...byTarget.values()].filter((v) => v.length > 1);
+      if (al.length) { const n = al.reduce((a, v) => a + v.length - 1, 0); aliasCount += n; aliasPages.push({ page: pi, groups: al.slice(0, 3) }); }
+    }
+    // text removed but its width kept: a TJ array holding only one large negative number
+    const c = scan.resolve(p.dict.Contents);
+    const refs = Array.isArray(c) ? c : p.dict.Contents ? [p.dict.Contents] : [];
+    let n = 0, chars = 0;
+    for (const ref of refs) {
+      if (!ref || !ref.ref) continue;
+      const d = scan.defAt(ref.ref[0]);
+      const data = d ? await scan.streamData(d) : null;
+      if (!data) continue;
+      const t = latin1(data);
+      const re = /\[\s*(-\d+(?:\.\d+)?)\s*\]\s*TJ/g;
+      let m;
+      while ((m = re.exec(t))) { const w = -parseFloat(m[1]); if (w >= 1000) { n++; chars += Math.round(w / 556); } }
+    }
+    if (n) { blanks += n; blankChars += chars; blankPages.push({ page: pi, count: n }); }
+  }
+  const pl = (list) => list.map((x) => x.page + 1).join(', ');
+  const rewritten = [];
+  for (const { page } of editorKeyPages) {
+    const p = pagesNow[page];
+    try {
+      const fonts = await fontDecoders(scan, p.resources);
+      const c = scan.resolve(p.dict.Contents);
+      for (const ref of (Array.isArray(c) ? c : [p.dict.Contents])) {
+        const d = ref && ref.ref ? scan.defAt(ref.ref[0]) : null;
+        const data = d ? await scan.streamData(d) : null;
+        if (data) for (const r of contentTextRuns(data, fonts, true)) if (r.font && EDITOR_FONT_KEYS.some(([re]) => re.test(r.font))) rewritten.push({ page: page + 1, text: r.text });
+      }
+    } catch { /* evidence only */ }
+  }
+  if (editorKeys) add({ code: 'EDITOR_FONT_NAMES', severity: 'high', category: 'structure', page: editorKeyPages[0].page,
+    title: `Text rewritten with an editor on page${editorKeyPages.length > 1 ? 's' : ''} ${pl(editorKeyPages)}`,
+    detail: `${editorKeys} font resources carry names a PDF content editor gives to text it rewrites (${editorKeyPages[0].keys.slice(0, 3).join(', ')}…). The bank’s generator never uses these names.${rewritten.length ? ` Text written with them includes: ${rewritten.filter((r) => /\d\.\d\d/.test(r.text)).slice(0, 6).map((r) => `“${r.text}” (page ${r.page})`).join(', ')}.` : ''}`,
+    evidence: { pages: editorKeyPages.map((x) => x.page + 1), resources: editorKeys, rewritten: rewritten.slice(0, 80) } });
+  if (aliasCount && !editorKeys) add({ code: 'FONT_ALIASES', severity: 'medium', category: 'structure', page: aliasPages[0].page,
+    title: `Same font registered under extra names on page${aliasPages.length > 1 ? 's' : ''} ${pl(aliasPages)}`,
+    detail: `The page refers to one font under several names (${aliasPages[0].groups[0].join(', ')}). Generators name each font once; editors add a new name each time they rewrite a piece of text.` });
+  if (blanks) add({ code: 'DELETED_TEXT', severity: 'high', category: 'content', page: blankPages[0].page,
+    title: `${blanks} pieces of text deleted on page${blankPages.length > 1 ? 's' : ''} ${pl(blankPages)}`,
+    detail: `In ${blanks} places the original characters were removed from the page but their spacing was kept (about ${blankChars} characters in total), the trace an editor leaves when it replaces text in place. The new text is drawn separately.`,
+    evidence: { pages: blankPages.map((x) => ({ page: x.page + 1, count: x.count })), deleted: blanks } });
 
   // active content
   let js = 0, launch = 0, files = 0, xfa = 0;
@@ -2062,6 +2199,8 @@ const CHECK_DEFS = [
   ['math', 'Running balance and totals', ['BALANCE_MISMATCH', 'CLOSING_MISMATCH', 'TOTAL_MISMATCH']],
   ['overlay', 'Annotations and form fields', ['TEXT_ANNOTATION', 'MARKUP_ANNOTATION', 'FORM_FIELD_VALUE']],
   ['scan', 'Real text, not a scanned image', ['SCANNED', 'NO_TEXT']],
+  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'FONT_ALIASES']],
+  ['encryption', 'Encryption and re-saving', ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'ENCRYPTION_VERSION_MISMATCH', 'ENCRYPTION_NO_OWNER_LOCK', 'VERSION_RAISED']],
   ['active', 'Scripts and attachments', ['JAVASCRIPT', 'LAUNCH_ACTION', 'EMBEDDED_FILES', 'XFA_FORM']]
 ];
 function integrityVerdict(res, content) {

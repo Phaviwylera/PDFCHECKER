@@ -17,7 +17,9 @@ const expect = {
   'scanned.pdf': { status: 201, decision: 'review' },
   'whitebox-edit.pdf': { status: 422, codes: ['COVER_UP', 'BALANCE_MISMATCH', 'FONT_MISMATCH', 'TEXT_ADDED'] },
   'retyped-amount.pdf': { status: 422, codes: ['TEXT_REPLACED', 'EDITING_SOFTWARE', 'BALANCE_MISMATCH'] },
-  'signed-then-altered.pdf': { status: 422, codes: ['SIGNATURE_BROKEN'] }
+  'signed-then-altered.pdf': { status: 422, codes: ['SIGNATURE_BROKEN'] },
+  // decrypted, edited in a content editor, re-encrypted with AES-256 and balanced (see test/make-reencrypted-fixture.py)
+  'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT'] }
 };
 let failed = 0;
 try {
@@ -26,6 +28,7 @@ try {
   for (const [name, want] of Object.entries(expect)) {
     const fd = new FormData();
     fd.append('file', new Blob([fs.readFileSync(path.join(root, 'test', 'fixtures', name))], { type: 'application/pdf' }), name);
+    if (want.password) fd.append('password', want.password);
     const t = Date.now();
     const r = await fetch(base + '/api/statements', { method: 'POST', body: fd });
     const body = await r.json();
