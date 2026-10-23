@@ -859,8 +859,10 @@ function renderEditMap(m) {
     const rows = m.edits.filter((e) => e.page === pg).map((e) => {
       const b = e.before, a = e.after;
       const role = e.role === 'narration' ? 'Narration' : e.role === 'amount' ? 'Amount' : e.role === 'balance' ? 'Balance' : b ? 'Text' : 'Added text';
-      const beforeCell = b ? `<span class="was">${b.format ? esc(b.format.replace(/d/g, '#')) : `≈${b.approxChars} characters`}</span>
-        <span class="sub">${b.width.toFixed(2)} pt wide (${b.widthEm.toLocaleString('en-IN')}/1000 em) · ${esc(b.font || '?')} ${b.size} pt · x ${b.x.toFixed(2)}</span>` : '<span class="sub">nothing here before</span>';
+      const beforeCell = !b ? '<span class="sub">nothing here before</span>'
+        : b.width == null ? `<span class="was">Deleted</span><span class="sub">the bank’s text object here is now empty · x ${Number(b.x || 0).toFixed(2)}</span>`
+        : `<span class="was">${b.format ? esc(b.format.replace(/d/g, '#')) : `≈${b.approxChars} characters`}</span>
+        <span class="sub">${b.width.toFixed(2)} pt wide (${Number(b.widthEm || 0).toLocaleString('en-IN')}/1000 em) · ${esc(b.font || '?')} ${b.size} pt · x ${b.x.toFixed(2)}${b.method ? ' · from the ' + esc(b.method) : ''}</span>`;
       const nowCell = a ? `<span class="mono">${esc(a.text)}</span>
         <span class="sub">${a.width.toFixed(2)} pt wide · ${esc(a.font || '?')} ${a.size} pt via /${esc(a.resource || '')} · x ${a.x.toFixed(2)}${Math.abs(a.hscale - 1) > 1e-6 ? ` · squeezed to ${(a.hscale * 100).toFixed(4)}%` : ''}</span>` : '—';
       const orig = b && (b.derived || b.digits) ? `<b>${esc(derivedText(e))}</b>` : '';
@@ -1183,7 +1185,8 @@ function textReport() {
       em.edits.forEach((e) => {
         const b = e.before, a = e.after;
         L.push(`  Page ${e.page}  ${e.row ? e.row.date + ' ' + (e.row.id || '') : ''}  ${e.role || ''}`);
-        if (b) L.push(`    before: ${b.format ? b.format.replace(/d/g, '#') : '~' + b.approxChars + ' characters'}  width ${b.width.toFixed(2)} pt (${b.widthEm}/1000 em)  ${b.font} ${b.size}pt  x=${b.x}`);
+        if (b && b.width == null) L.push(`    before: deleted (empty text object at x=${b.x})`);
+        else if (b) L.push(`    before: ${b.format ? b.format.replace(/d/g, '#') : '~' + b.approxChars + ' characters'}  width ${b.width.toFixed(2)} pt (${b.widthEm}/1000 em)  ${b.font} ${b.size}pt  x=${b.x}${b.method ? '  (from the ' + b.method + ')' : ''}`);
         if (a) L.push(`    now:    ${a.text}  width ${a.width.toFixed(2)} pt  ${a.font} ${a.size}pt via /${a.resource}  x=${a.x}${Math.abs(a.hscale - 1) > 1e-6 ? '  scale ' + a.hscale : ''}`);
         if (e.shift) L.push(`    spacing: ${shiftText(e.shift)}`);
         if (b && (b.derived || b.digits)) L.push(`    original value: ${derivedText(e)}`);

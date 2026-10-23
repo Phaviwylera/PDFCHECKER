@@ -20,7 +20,9 @@ const expect = {
   'signed-then-altered.pdf': { status: 422, codes: ['SIGNATURE_BROKEN'] },
   // decrypted, edited in a content editor, re-encrypted with AES-256 and balanced (see test/make-reencrypted-fixture.py)
   'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED'],
-    editMap: { now: '1,85,000.00', digits: 5 } }
+    editMap: { now: '1,85,000.00', digits: 5 } },
+  // value retyped inside the bank's own text object, no editor fonts or spacers (see test/make-inplace-fixture.py)
+  'inplace-edit.pdf': { status: 422, codes: ['IN_PLACE_EDITS', 'AMOUNTS_INFLATED'], editMap: { now: '1,85,000.00', digits: 5 } }
 };
 let failed = 0;
 try {
