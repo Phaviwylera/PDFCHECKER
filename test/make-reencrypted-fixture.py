@@ -30,8 +30,8 @@ fonts[pikepdf.Name("/PSEditFont1")] = fonts[pikepdf.Name("/F3+0")]
 data = page.Contents.read_bytes()
 old = b"(85,000.00) Tj"
 assert old in data, "salary row not found in the genuine fixture"
-# delete the original glyphs but keep their advance width (85,000.00 = 4448/1000 em in Helvetica)
-data = data.replace(old, b"[-4448] TJ", 1)
+# delete the original glyphs but keep their advance width (85,000.00 = 7 digits x 636 + 2 x 318 = 5088/1000 em in DejaVu Sans)
+data = data.replace(old, b"[-5088] TJ", 1)
 data += b"\nq 0 0 0 rg BT /PSEditFont1 8.5 Tf 0.9998992 0 0 1 430.24 617.8898 Tm (1,85,000.00) Tj ET Q\n"
 page.Contents.write(data)
 

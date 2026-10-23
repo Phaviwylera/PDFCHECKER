@@ -294,6 +294,25 @@ input[type="datetime-local"]:disabled { opacity: 0.5; }
 .findings { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .finding { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 14px; padding: 12px 14px; border-top: 1px solid var(--line); }
 .finding:first-child { border-top: 0; }
+.editmap { margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.editmap > header { padding: 12px 14px; background: var(--fail-bg); }
+.editmap > header h3 { margin: 0 0 2px; font-size: 15px; }
+.editmap > header p { margin: 0; color: var(--muted); font-size: 13px; }
+.editmap .em-sec { padding: 12px 14px; border-top: 1px solid var(--line); }
+.editmap h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.em-scroll { overflow-x: auto; }
+.em-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.em-table th, .em-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.em-table th { font-weight: 600; color: var(--muted); white-space: nowrap; }
+.em-table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.em-table .was { color: var(--fail); }
+.em-table .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.em-table .sub { display: block; color: var(--muted); font-size: 11.5px; }
+.em-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--fail-bg); color: var(--fail); }
+.em-badge.ok { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.em-page { margin: 14px 0 6px; font-weight: 600; font-size: 13px; }
+.em-edits { table-layout: fixed; }
+.em-edits td { overflow-wrap: anywhere; }
 .sev { font-family: var(--font-label); font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; justify-self: start; height: max-content; margin-top: 1px; }
 .finding[data-sev="high"] .sev { background: var(--fail-bg); color: var(--fail); }
 .finding[data-sev="medium"] .sev { background: var(--warn-bg); color: var(--warn); }
@@ -801,6 +820,62 @@ function renderFinding(f) {
     <div><h3>${esc(f.title)}</h3><p>${esc(f.detail)}</p>${renderEvidence(f.evidence)}
     <div class="f-meta">${f.page != null ? `<span class="pg">Page ${f.page + 1}</span>` : ''}<span class="code-tag">${esc(f.code)}</span></div></div></li>`;
 }
+const rupees = (v) => (v < 0 ? '−' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function derivedText(e) {
+  const d = e.before && e.before.derived;
+  if (!d) return e.before && e.before.digits ? `${e.before.digits} digit${e.before.digits === 1 ? '' : 's'} before the decimal` : '—';
+  const part = ([lo, hi]) => {
+    if (e.role === 'balance') return lo === hi ? rupees(lo) : `${rupees(lo)} to ${rupees(hi)}`;
+    if (hi <= 0) return `debit ${rupees(-hi)}${lo !== hi ? ' to ' + rupees(-lo) : ''}`;
+    if (lo >= 0) return `credit ${rupees(lo)}${lo !== hi ? ' to ' + rupees(hi) : ''}`;
+    return `${rupees(lo)} to ${rupees(hi)} (debit or credit)`;
+  };
+  return d.sets.map(part).join(' or ');
+}
+function shiftText(sh) {
+  if (!sh) return '—';
+  const f = (n) => (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n).toFixed(2) + ' pt';
+  const bits = [];
+  bits.push(`width ${f(sh.width)}`);
+  bits.push(Math.abs(sh.left) < 0.05 ? 'left edge unchanged' : `starts ${Math.abs(sh.left).toFixed(2)} pt ${sh.left < 0 ? 'further left' : 'further right'}`);
+  bits.push(Math.abs(sh.right) < 0.05 ? 'right edge unchanged' : `right edge ${f(sh.right)}`);
+  if (Math.abs(sh.baseline) >= 0.001) bits.push(`baseline ${f(sh.baseline)}`);
+  return bits.join(' · ');
+}
+function renderEditMap(m) {
+  if (!m || !m.edits || !m.edits.length) return '';
+  const fonts = m.fonts || [];
+  const before = fonts.filter((f) => f.origin !== 'added');
+  const added = fonts.filter((f) => f.origin === 'added');
+  const pages = [...new Set(m.edits.map((e) => e.page))];
+  const replaced = m.edits.filter((e) => e.before).length;
+  const fontRows = fonts.map((f) => `<tr><td class="mono">${esc(f.baseFont)}<span class="sub">${esc(f.subtype)}</span></td>
+    <td>${f.origin === 'added' ? '<span class="was">Not present</span>' : 'Present'}</td>
+    <td>${f.origin === 'added' ? '<span class="em-badge">Added by the editor</span>' : f.editorNames ? `Present, also registered under <b>${f.editorNames}</b> editor name${f.editorNames === 1 ? '' : 's'}` : 'Unchanged'}</td>
+    <td class="num">${f.runs.toLocaleString('en-IN')}${f.editorRuns ? `<span class="sub">${f.editorRuns} by the editor</span>` : ''}</td>
+    <td>${f.fractionalWidths ? '<span class="was">Fractional</span><span class="sub">e.g. 722.168, unlike the bank’s</span>' : 'Whole numbers'}</td>
+    <td class="num">${f.pages.length === 1 ? 'Page ' + f.pages[0] : f.pages.length + ' pages'}${f.origin === 'added' ? `<span class="sub">${esc(f.pages.join(', '))}</span>` : ''}</td></tr>`).join('');
+  const byPage = pages.map((pg) => {
+    const rows = m.edits.filter((e) => e.page === pg).map((e) => {
+      const b = e.before, a = e.after;
+      const role = e.role === 'narration' ? 'Narration' : e.role === 'amount' ? 'Amount' : e.role === 'balance' ? 'Balance' : b ? 'Text' : 'Added text';
+      const beforeCell = b ? `<span class="was">${b.format ? esc(b.format.replace(/d/g, '#')) : `≈${b.approxChars} characters`}</span>
+        <span class="sub">${b.width.toFixed(2)} pt wide (${b.widthEm.toLocaleString('en-IN')}/1000 em) · ${esc(b.font || '?')} ${b.size} pt · x ${b.x.toFixed(2)}</span>` : '<span class="sub">nothing here before</span>';
+      const nowCell = a ? `<span class="mono">${esc(a.text)}</span>
+        <span class="sub">${a.width.toFixed(2)} pt wide · ${esc(a.font || '?')} ${a.size} pt via /${esc(a.resource || '')} · x ${a.x.toFixed(2)}${Math.abs(a.hscale - 1) > 1e-6 ? ` · squeezed to ${(a.hscale * 100).toFixed(4)}%` : ''}</span>` : '—';
+      const orig = b && (b.derived || b.digits) ? `<b>${esc(derivedText(e))}</b>` : '';
+      return `<tr><td class="num">${esc(e.row ? e.row.date : '')}<span class="sub mono">${esc(e.row && e.row.id ? e.row.id : '')}</span><span class="sub">${role}</span></td><td>${beforeCell}</td><td>${nowCell}</td><td>${orig ? `<span class="sub" style="color:var(--ink)">Original: ${orig}</span>` : ''}<span class="sub">${esc(shiftText(e.shift))}</span></td></tr>`;
+    }).join('');
+    return `<p class="em-page">Page ${pg}</p><div class="em-scroll"><table class="em-table em-edits"><colgroup><col style="width:17%"><col style="width:24%"><col style="width:33%"><col style="width:26%"></colgroup><thead><tr><th>Row</th><th>Before (deleted)</th><th>Now (shown)</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join('');
+  return `<section class="editmap" aria-label="What changed">
+    <header><h3>What changed, in detail</h3><p>${replaced} value${replaced === 1 ? ' was' : 's were'} deleted and retyped on page${pages.length === 1 ? '' : 's'} ${esc(pages.join(', '))}. Before editing the file used ${before.length} font${before.length === 1 ? '' : 's'}; now it has ${fonts.length}${added.length ? ` (${added.map((f) => esc(f.baseFont)).join(', ')} added)` : ''}.</p></header>
+    <div class="em-sec"><h4>Fonts: before and now</h4><div class="em-scroll"><table class="em-table"><thead><tr><th>Font</th><th>Before editing</th><th>Now</th><th>Text pieces</th><th>Glyph widths</th><th>Where</th></tr></thead><tbody>${fontRows}</tbody></table></div></div>
+    <div class="em-sec"><h4>Every edited value</h4>
+      <p class="sub" style="margin:0 0 6px;color:var(--muted);font-size:12.5px">“Before” is measured from the blank space the editor left where it deleted the bank’s text: its width gives the original length (# = one digit). “Original value” comes from working the running balance through the untouched rows on either side.</p>
+      ${byPage}</div>
+  </section>`;
+}
 function renderGate(v) {
   if (!v) return '';
   const g = GATE[v.decision];
@@ -821,6 +896,7 @@ function renderGate(v) {
       ${minor.length ? `<details class="minor"${main.length ? '' : ' open'}><summary>${minor.length} minor note${minor.length === 1 ? '' : 's'}</summary><ol class="findings">${minor.map(renderFinding).join('')}</ol></details>` : ''}
       <section><h3 class="section-title">${ran} of ${v.checks.length} checks ran</h3>
         <div class="checkgrid">${v.checks.map((c) => `<div class="ck" data-state="${c.state}">${ico(c.state === 'skip' || c.state === 'none' ? 'info' : c.state)}<span><span class="ck-label">${esc(c.label)}</span>${c.note ? `<span class="ck-note">${esc(c.note)}</span>` : ''}</span></div>`).join('')}</div></section>
+      ${renderEditMap(state.result && state.result.structure && state.result.structure.info && state.result.structure.info.editMap)}
       ${renderServerPanel(v)}
     </div></section>`;
 }
@@ -1099,6 +1175,20 @@ function textReport() {
     });
     L.push('', 'Checks:');
     v.checks.forEach((c) => L.push(`  [${c.state.toUpperCase().padEnd(4)}] ${c.label}${c.note ? ': ' + c.note : ''}`));
+    const em = res.structure && res.structure.info && res.structure.info.editMap;
+    if (em && em.edits && em.edits.length) {
+      L.push('', 'WHAT CHANGED', '', 'Fonts (before -> now):');
+      em.fonts.forEach((f) => L.push(`  ${f.baseFont.padEnd(26)} ${f.origin === 'added' ? 'NOT PRESENT -> ADDED BY EDITOR' : f.editorNames ? `present -> also registered under ${f.editorNames} editor names` : 'present -> unchanged'}  (${f.runs} text pieces${f.editorRuns ? `, ${f.editorRuns} by editor` : ''}; ${f.fractionalWidths ? 'fractional' : 'whole-number'} glyph widths; pages ${f.pages.length > 6 ? f.pages.length + ' pages' : f.pages.join(', ')})`));
+      L.push('', 'Edited values:');
+      em.edits.forEach((e) => {
+        const b = e.before, a = e.after;
+        L.push(`  Page ${e.page}  ${e.row ? e.row.date + ' ' + (e.row.id || '') : ''}  ${e.role || ''}`);
+        if (b) L.push(`    before: ${b.format ? b.format.replace(/d/g, '#') : '~' + b.approxChars + ' characters'}  width ${b.width.toFixed(2)} pt (${b.widthEm}/1000 em)  ${b.font} ${b.size}pt  x=${b.x}`);
+        if (a) L.push(`    now:    ${a.text}  width ${a.width.toFixed(2)} pt  ${a.font} ${a.size}pt via /${a.resource}  x=${a.x}${Math.abs(a.hscale - 1) > 1e-6 ? '  scale ' + a.hscale : ''}`);
+        if (e.shift) L.push(`    spacing: ${shiftText(e.shift)}`);
+        if (b && (b.derived || b.digits)) L.push(`    original value: ${derivedText(e)}`);
+      });
+    }
   }
   L.push('', '-'.repeat(72), tallyText(res.signatures), '');
   res.signatures.forEach((r, i) => {

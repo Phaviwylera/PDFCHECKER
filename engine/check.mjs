@@ -52,6 +52,7 @@ export async function checkPdf(bytes, { password } = {}) {
     warnings: v.findings.filter((f) => f.severity !== 'high').map(toMsg),
     positives: v.positives.map((p) => ({ code: p.code, title: p.title, message: `${p.title}. ${p.detail}` })),
     checks: v.checks,
+    editMap: (res.structure && res.structure.info && res.structure.info.editMap) || null,
     file: {
       bytes: res.fileSize, sha256: res.sha256, revisions: res.revisions,
       encrypted: res.encryption ? { method: res.encryption.label, unlocked: !!res.encryption.unlocked } : null,

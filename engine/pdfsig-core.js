@@ -1619,7 +1619,31 @@ async function fontDecoders(scan, resources, rev) {
       if (data) cmap = parseCMapToUnicode(latin1(data));
     }
     const type0 = f.Subtype === 'Type0';
-    out.set(name, { cmap, codeLen: cmap ? cmap.codeLen : type0 ? 2 : 1, baseFont: f.BaseFont || '' });
+    // glyph widths in 1/1000 em, keyed by character code (Identity CID fonts: code = CID)
+    const widths = new Map();
+    let dw = 1000, fractional = false;
+    try {
+      if (type0) {
+        const desc = scan.resolve(f.DescendantFonts, rev);
+        const df = Array.isArray(desc) ? scan.resolve(desc[0], rev) : null;
+        if (df) {
+          if (typeof df.DW === 'number') dw = df.DW;
+          const W = scan.resolve(df.W, rev);
+          if (Array.isArray(W)) for (let i = 0; i < W.length;) {
+            const c1 = scan.resolve(W[i], rev), nx = scan.resolve(W[i + 1], rev);
+            if (Array.isArray(nx)) { nx.forEach((w, k) => { const v = +scan.resolve(w, rev); widths.set(c1 + k, v); if (v % 1) fractional = true; }); i += 2; }
+            else { const w = +scan.resolve(W[i + 2], rev); for (let c = c1; c <= nx; c++) widths.set(c, w); if (w % 1) fractional = true; i += 3; }
+          }
+        }
+      } else {
+        const fc = f.FirstChar | 0, Wd = scan.resolve(f.Widths, rev);
+        if (Array.isArray(Wd)) Wd.forEach((w, k) => { const v = +scan.resolve(w, rev); widths.set(fc + k, v); if (v % 1) fractional = true; });
+        const fd = scan.resolve(f.FontDescriptor, rev);
+        dw = fd && typeof fd.MissingWidth === 'number' ? fd.MissingWidth : (/Helvetica|Arial/i.test(String(f.BaseFont)) ? 556 : 500);
+      }
+    } catch { /* widths are optional */ }
+    out.set(name, { cmap, codeLen: cmap ? cmap.codeLen : type0 ? 2 : 1, baseFont: f.BaseFont || '', subtype: f.Subtype || '', ref: ref && ref.ref ? ref.ref.join(' ') : null,
+      widths, dw, fractional, width: (code) => (widths.has(code) ? widths.get(code) : dw) });
   }
   return out;
 }
@@ -1635,6 +1659,253 @@ function decodeShown(bytesStr, font) {
   }
   return s;
 }
+/* Text-showing operations with position, font and measured width (page space, points). */
+function textOpsDetailed(data, fonts) {
+  const t = latin1(data);
+  const ops = [];
+  const stack = [];
+  const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
+  let ctm = [1, 0, 0, 1, 0, 0]; const ctmStack = [];
+  let tm = [1, 0, 0, 1, 0, 0], tlm = [1, 0, 0, 1, 0, 0];
+  let fontKey = null, font = null, size = 0, TL = 0, Tc = 0, Tw = 0, Tz = 100;
+  let i = 0; const n = t.length;
+  const isDelim = (c) => /[\s()<>[\]{}/%]/.test(c);
+  const codesOf = (str) => { const L = font ? font.codeLen : 1; const out = []; for (let k = 0; k + L <= str.length; k += L) { let c = 0; for (let j = 0; j < L; j++) c = (c << 8) | str[k + j]; out.push(c); } return out; };
+  const show = (items, kind) => {
+    const m = mul(tm, ctm);
+    let adv = 0, text = '', glyphs = 0, adjust = 0;
+    for (const it of items) {
+      if (it.str) {
+        text += decodeShown(it.str, font);
+        for (const c of codesOf(it.str)) { const w = font ? font.width(c) : 500; adv += (w / 1000) * size + Tc + (c === 32 && (!font || font.codeLen === 1) ? Tw : 0); glyphs++; }
+      } else if (it.num !== undefined) { adv -= (it.num / 1000) * size; adjust += it.num; if (it.num < -180 && text && !text.endsWith(' ')) text += ' '; }
+    }
+    const hs = Tz / 100;
+    const sx = Math.hypot(m[0], m[1]);
+    ops.push({ fontKey, baseFont: font ? font.baseFont : null, fontRef: font ? font.ref : null, size: +(size * Math.abs(tm[3] || 1)).toFixed(3),
+      x: +m[4].toFixed(2), y: +m[5].toFixed(2), hscale: +(tm[0] * hs).toFixed(7), text, glyphs, adjust, width: +(adv * hs * sx).toFixed(2), kind });
+    tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + adv * hs * tm[0], tm[5] + adv * hs * tm[1]];
+  };
+  while (i < n) {
+    const c = t[i];
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '%') { while (i < n && t[i] !== '\n' && t[i] !== '\r') i++; continue; }
+    if (c === '(' || (c === '<' && t[i + 1] !== '<')) { const s = parseStringAt(data, t, i); stack.push({ str: s.raw }); i = s.end; continue; }
+    if (c === '<' && t[i + 1] === '<') { let d = 1; i += 2; while (i < n && d) { if (t[i] === '<' && t[i + 1] === '<') { d++; i += 2; } else if (t[i] === '>' && t[i + 1] === '>') { d--; i += 2; } else i++; } stack.push({ dict: true }); continue; }
+    if (c === '[') { stack.push({ arrStart: true }); i++; continue; }
+    if (c === ']') { const arr = []; while (stack.length && !stack[stack.length - 1].arrStart) arr.unshift(stack.pop()); stack.pop(); stack.push({ arr }); i++; continue; }
+    if (c === '/') { let j = i + 1; while (j < n && !isDelim(t[j])) j++; stack.push({ name: t.slice(i + 1, j) }); i = j; continue; }
+    let j = i; while (j < n && !isDelim(t[j])) j++;
+    if (j === i) { i++; continue; }
+    const tok = t.slice(i, j); i = j;
+    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(tok)) { stack.push({ num: +tok }); continue; }
+    const nums = stack.filter((x) => x.num !== undefined).map((x) => x.num);
+    const last = (k) => nums.slice(-k);
+    switch (tok) {
+      case 'BI': { const e = t.indexOf('EI', i); i = e < 0 ? n : e + 2; break; }
+      case 'q': ctmStack.push(ctm); break;
+      case 'Q': ctm = ctmStack.pop() || [1, 0, 0, 1, 0, 0]; break;
+      case 'cm': if (nums.length >= 6) ctm = mul(last(6), ctm); break;
+      case 'BT': tm = [1, 0, 0, 1, 0, 0]; tlm = tm; break;
+      case 'Tm': if (nums.length >= 6) { tm = last(6); tlm = tm; } break;
+      case 'Td': case 'TD': if (nums.length >= 2) { const [tx, ty] = last(2); if (tok === 'TD') TL = -ty; tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] + tx * tlm[0] + ty * tlm[2], tlm[5] + tx * tlm[1] + ty * tlm[3]]; tm = tlm; } break;
+      case 'T*': tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] - TL * tlm[2], tlm[5] - TL * tlm[3]]; tm = tlm; break;
+      case 'TL': if (nums.length) TL = last(1)[0]; break;
+      case 'Tc': if (nums.length) Tc = last(1)[0]; break;
+      case 'Tw': if (nums.length) Tw = last(1)[0]; break;
+      case 'Tz': if (nums.length) Tz = last(1)[0]; break;
+      case 'Tf': { const nm = stack.find((x) => x.name); fontKey = nm ? nm.name : null; font = fontKey ? fonts.get(fontKey) || null : null; size = nums.length ? last(1)[0] : size; break; }
+      case 'Tj': { const s = stack[stack.length - 1]; if (s && s.str) show([s], 'text'); break; }
+      case "'": case '"': { tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] - TL * tlm[2], tlm[5] - TL * tlm[3]]; tm = tlm; const s = stack[stack.length - 1]; if (s && s.str) show([s], 'text'); break; }
+      case 'TJ': {
+        const a = stack[stack.length - 1];
+        if (a && a.arr) {
+          const hasStr = a.arr.some((e) => e.str && e.str.length);
+          const total = a.arr.reduce((acc, e) => acc + (e.num !== undefined ? e.num : 0), 0);
+          show(a.arr, !hasStr && total <= -1000 ? 'blank' : 'text');
+        }
+        break;
+      }
+      default: break;
+    }
+    stack.length = 0;
+  }
+  return ops;
+}
+
+/* Interval sets: arrays of [lo, hi], kept sorted and merged. */
+const IV = {
+  norm: (a) => { const s = a.filter(([l, h]) => l <= h + 1e-9).sort((x, y) => x[0] - y[0]); const o = []; for (const [l, h] of s) { const p = o[o.length - 1]; if (p && l <= p[1] + 0.005) p[1] = Math.max(p[1], h); else o.push([l, h]); } return o; },
+  add: (a, b) => IV.norm(a.flatMap(([l1, h1]) => b.map(([l2, h2]) => [l1 + l2, h1 + h2]))),
+  neg: (a) => IV.norm(a.map(([l, h]) => [-h, -l])),
+  and: (a, b) => IV.norm(a.flatMap(([l1, h1]) => b.map(([l2, h2]) => [Math.max(l1, l2), Math.min(h1, h2)]))),
+  pt: (v) => [[v, v]]
+};
+const digitRange = (d) => [d === 1 ? 0 : 10 ** (d - 1), 10 ** d - 0.01];
+/* Works the running balance through each edited stretch to bound the original values. */
+function solveOriginals(rows, edits) {
+  rows.sort((a, b) => a.page - b.page || b.y - a.y);
+  const ALL = [[-1e12, 1e12]];
+  for (let i = 1; i < rows.length; i++) {
+    if (!(rows[i].amountEdit || rows[i].balanceEdit)) continue;
+    let j = i;
+    while (j + 1 < rows.length && (rows[j + 1].amountEdit || rows[j + 1].balanceEdit || rows[j].balanceEdit)) j++;
+    const start = rows[i - 1], seg = rows.slice(i, j + 1);
+    i = j;
+    if (start.balanceEdit || seg[seg.length - 1].balanceEdit) continue;
+    // amount sets
+    const A = seg.map((r) => {
+      if (!r.amountEdit) return IV.pt(r.amount);
+      const d = r.amountEdit.before.digits;
+      if (!d) return ALL;
+      const [lo, hi] = digitRange(d);
+      const signKnown = r.amountSigned && !r.narrationEdited;
+      if (signKnown) return r.amount >= 0 ? [[lo, hi]] : [[-hi, -lo]];
+      return IV.norm([[lo, hi], [-hi, -lo]]);
+    });
+    const B = seg.map((r) => {
+      if (!r.balanceEdit) return IV.pt(r.balance);
+      const d = r.balanceEdit.before.digits;
+      if (!d) return ALL;
+      const [lo, hi] = digitRange(d);
+      return /\(?dr\)?$/i.test(r.balanceEdit.after ? r.balanceEdit.after.text : '') ? [[-hi, -lo]] : [[lo, hi]];
+    });
+    const P = [IV.pt(start.balance), ...B.map((b) => b)];
+    for (let it = 0; it < 6; it++) {
+      for (let k = 1; k < P.length; k++) P[k] = IV.and(P[k], IV.add(P[k - 1], A[k - 1]));
+      for (let k = P.length - 1; k >= 1; k--) P[k - 1] = IV.and(P[k - 1], IV.add(P[k], IV.neg(A[k - 1])));
+    }
+    if (P.some((x) => !x.length)) continue; // inconsistent: leave unsolved
+    seg.forEach((r, k) => {
+      const tag = (e, set) => { if (!e || !set.length) return; const lo = set[0][0], hi = set[set.length - 1][1]; e.before.derived = { lo: Math.round(lo * 100) / 100, hi: Math.round(hi * 100) / 100, sets: set.map(([l, h]) => [Math.round(l * 100) / 100, Math.round(h * 100) / 100]) }; };
+      if (r.amountEdit) tag(r.amountEdit, IV.and(A[k], IV.add(P[k + 1], IV.neg(P[k]))));
+      if (r.balanceEdit) tag(r.balanceEdit, P[k + 1]);
+      for (const e of [r.amountEdit, r.balanceEdit]) if (e) { e.row = { date: r.date, id: r.id }; e.role = e === r.amountEdit ? 'amount' : 'balance'; }
+    });
+  }
+  // label the remaining edits with their row
+  for (const e of edits) if (!e.row) {
+    const r = rows.find((x) => x.page === e.page && Math.abs(x.y - e.y) <= 1.5);
+    if (r) { e.row = { date: r.date, id: r.id }; e.role = e.before && e.before.digits ? (e === r.amountEdit ? 'amount' : 'balance') : 'narration'; }
+  }
+}
+
+/* Pairs each deleted-text spacer with the editor text drawn in its place and lists the fonts before and after. */
+async function buildEditMap(scan, pages, isEditorKey) {
+  const fontsById = new Map();
+  const edits = [];
+  const allRows = [];
+  for (let pi = 0; pi < pages.length; pi++) {
+    const p = pages[pi];
+    let fonts;
+    try { fonts = await fontDecoders(scan, p.resources); } catch { continue; }
+    for (const [key, f] of fonts) {
+      const id = f.ref || key + '@' + pi;
+      const e = fontsById.get(id) || { id, baseFont: String(f.baseFont).replace(/^\//, ''), subtype: String(f.subtype).replace(/^\//, ''), fractionalWidths: f.fractional, names: new Set(), pages: new Set(), runs: 0, editorRuns: 0 };
+      e.names.add(key); e.pages.add(pi + 1); fontsById.set(id, e);
+    }
+    const c = scan.resolve(p.dict.Contents);
+    const refs = Array.isArray(c) ? c : p.dict.Contents ? [p.dict.Contents] : [];
+    const ops = [];
+    for (const ref of refs) {
+      const d = ref && ref.ref ? scan.defAt(ref.ref[0]) : null;
+      const data = d ? await scan.streamData(d) : null;
+      if (data) ops.push(...textOpsDetailed(data, fonts));
+    }
+    for (const o of ops) { const e = fontsById.get(o.fontRef); if (e && o.kind === 'text') { e.runs++; if (isEditorKey(o.fontKey)) e.editorRuns++; } }
+    const blanks = ops.filter((o) => o.kind === 'blank');
+    const added = ops.filter((o) => o.kind === 'text' && isEditorKey(o.fontKey));
+    const used = new Set();
+    for (const b of blanks) {
+      const bL = b.x, bR = b.x + b.width;
+      let best = null, bestScore = Infinity;
+      added.forEach((a, k) => {
+        if (used.has(k) || Math.abs(a.y - b.y) > 1.5) return;
+        const aL = a.x, aR = a.x + a.width;
+        const overlap = Math.min(aR, bR) - Math.max(aL, bL);
+        const score = Math.min(Math.abs(aR - bR), Math.abs(aL - bL));
+        if ((overlap > 0 || score < 3) && score < bestScore) { best = k; bestScore = score; }
+      });
+      const a = best != null ? added[best] : null;
+      if (best != null) used.add(best);
+      const fm = fonts.get(b.fontKey);
+      const em = -b.adjust; // width in 1/1000 em
+      let digits = null, range = null, format = null;
+      const money = a && /^([\d,]+)\.(\d\d)(.*)$/.exec(a.text.trim());
+      const enc = (ch) => { if (!fm) return 556; const code = fm.cmap ? [...fm.cmap.map.entries()].find(([, u]) => u === ch) : null; return code ? fm.width(code[0]) : fm.codeLen === 1 ? fm.width(ch.charCodeAt(0)) : fm.dw; };
+      if (money && fm) {
+        // same format as the new value, solve for the number of integer digits
+        const rest = '.' + money[2] + money[3];
+        const restW = [...rest].reduce((acc, ch) => acc + enc(ch), 0);
+        const dW = enc('0'), cW = enc(',');
+        const grouped = money[1].includes(',');
+        const indian = /\d,\d\d,\d{3}$/.test(money[1]) || (grouped && /^\d{1,2},\d{3}$/.test(money[1]) === false && /,\d\d,/.test(money[1]));
+        const commas = (k) => (!grouped || k <= 3 ? 0 : indian ? Math.floor((k - 2) / 2) : Math.floor((k - 1) / 3));
+        const group = (k) => { const d = 'd'.repeat(k); if (!grouped || k <= 3) return d; const tail = d.slice(-3); let head = d.slice(0, -3); const parts = []; const step = indian ? 2 : 3; while (head.length > step) { parts.unshift(head.slice(-step)); head = head.slice(0, -step); } if (head) parts.unshift(head); return parts.concat(tail).join(','); };
+        for (let k = 1; k <= 13 && dW > 0; k++) {
+          if (Math.abs(k * dW + commas(k) * cW + restW - em) <= 0.08 * dW) {
+            digits = k; format = group(k) + '.dd' + money[3];
+            range = [k === 1 ? 0 : 10 ** (k - 1), 10 ** k - 0.01];
+            break;
+          }
+        }
+      }
+      const avg = enc('0') || 556;
+      edits.push({
+        page: pi + 1, y: b.y,
+        before: { font: fm ? String(fm.baseFont).replace(/^\//, '') : null, resource: b.fontKey, size: b.size, x: b.x, width: b.width, right: +(bR).toFixed(2), widthEm: em,
+          approxChars: Math.round(em / avg), digits, format, range },
+        after: a ? { text: a.text, font: a.baseFont ? String(a.baseFont).replace(/^\//, '') : null, resource: a.fontKey, size: a.size, x: a.x, width: a.width, right: +(a.x + a.width).toFixed(2),
+          hscale: a.hscale, chars: a.text.length } : null,
+        shift: a ? { left: +(a.x - bL).toFixed(2), right: +(a.x + a.width - bR).toFixed(2), width: +(a.width - b.width).toFixed(2), baseline: +(a.y - b.y).toFixed(3) } : null
+      });
+    }
+    // table rows on this page, for the balance chain
+    {
+      const cellOps = ops.filter((o) => o.kind === 'blank' || (o.kind === 'text' && o.text.trim()));
+      const rowsHere = [];
+      for (const o of cellOps.slice().sort((p1, p2) => p2.y - p1.y || p1.x - p2.x)) {
+        let r = rowsHere.find((rw) => Math.abs(rw.y - o.y) <= 1.5);
+        if (!r) { r = { page: pi + 1, y: o.y, ops: [] }; rowsHere.push(r); }
+        r.ops.push(o);
+      }
+      for (const r of rowsHere) {
+        // edited cells: a spacer plus the editor text drawn over it
+        const pageEdits = edits.filter((e) => e.page === pi + 1 && Math.abs(e.y - r.y) <= 1.5 && e.before);
+        const cells = [];
+        for (const o of r.ops.sort((p1, p2) => p1.x - p2.x)) {
+          if (o.kind === 'blank') continue;
+          if (isEditorKey(o.fontKey)) continue;
+          cells.push({ x: o.x, right: o.x + o.width, text: o.text.trim(), edit: null });
+        }
+        for (const e of pageEdits) cells.push({ x: e.before.x, right: e.before.right, text: e.after ? e.after.text.trim() : '', edit: e });
+        cells.sort((c1, c2) => c1.x - c2.x);
+        const money = cells.map((c) => ({ c, m: /^-?([\d,]+)\.(\d\d)\s?\(?(Cr|Dr|CR|DR|cr|dr)?\)?$/.exec(c.text) })).filter((x) => x.m);
+        if (money.length < 2) continue;
+        const date = cells.find((c) => /^\d{1,2}[-/.](\d{1,2}|[A-Za-z]{3})[-/.]\d{2,4}$/.test(c.text));
+        if (!date) continue;
+        const val = (x) => { const v = parseFloat(x.m[1].replace(/,/g, '') + '.' + x.m[2]); return /dr/i.test(x.m[3] || '') ? -v : v; };
+        const bal = money[money.length - 1], amt = money[money.length - 2];
+        const idCell = cells[cells.indexOf(date) + 1];
+        allRows.push({ page: pi + 1, y: r.y, date: date.text, id: idCell && !idCell.edit ? idCell.text : null,
+          amount: val(amt), amountEdit: amt.c.edit, amountSigned: !!amt.m[3], balance: val(bal), balanceEdit: bal.c.edit,
+          narrationEdited: pageEdits.some((e) => e !== amt.c.edit && e !== bal.c.edit && !e.before.digits) });
+      }
+    }
+    // editor text with no spacer under it: pure additions
+    added.forEach((a, k) => { if (!used.has(k)) edits.push({ page: pi + 1, y: a.y, before: null, after: { text: a.text, font: a.baseFont ? String(a.baseFont).replace(/^\//, '') : null, resource: a.fontKey, size: a.size, x: a.x, width: a.width, right: +(a.x + a.width).toFixed(2), hscale: a.hscale, chars: a.text.length }, shift: null }); });
+  }
+  try { solveOriginals(allRows, edits); } catch { /* bounds are optional */ }
+  const fonts = [...fontsById.values()].map((f) => {
+    const editorNames = [...f.names].filter(isEditorKey);
+    const plainNames = [...f.names].filter((k) => !isEditorKey(k));
+    const addedByEditor = (f.runs > 0 && f.editorRuns === f.runs && plainNames.length === 0) || /[-_]\d{2,}$/.test(f.baseFont);
+    return { baseFont: f.baseFont, subtype: f.subtype, fractionalWidths: f.fractionalWidths, names: [...f.names].sort(), pages: [...f.pages].sort((a, b) => a - b), runs: f.runs, editorRuns: f.editorRuns,
+      origin: addedByEditor ? 'added' : editorNames.length ? 'original, re-registered by the editor' : 'original', editorNames: editorNames.length };
+  });
+  return { fonts, edits: edits.sort((a, b) => a.page - b.page || b.y - a.y) };
+}
+
 /* Tokenises a content stream and returns text runs in drawing order. */
 function contentTextRuns(data, fonts, withFont) {
   const t = latin1(data);
@@ -2142,6 +2413,10 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
     if (n) { blanks += n; blankChars += chars; blankPages.push({ page: pi, count: n }); }
   }
   const pl = (list) => list.map((x) => x.page + 1).join(', ');
+  if (editorKeys || blanks) {
+    try { info.editMap = await buildEditMap(scan, pagesNow, (k) => !!k && EDITOR_FONT_KEYS.some(([re]) => re.test(k))); }
+    catch (e) { info.editMap = { error: String((e && e.message) || e) }; }
+  }
   const rewritten = [];
   for (const { page } of editorKeyPages) {
     const p = pagesNow[page];

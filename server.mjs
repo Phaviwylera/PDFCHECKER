@@ -100,7 +100,7 @@ app.post('/api/statements', upload.single('file'), async (req, res, next) => {
       return res.status(422).json({
         accepted: false, decision: 'reject', riskScore: result.riskScore,
         message: 'Upload rejected: this statement shows signs of editing.',
-        errors: result.errors, warnings: result.warnings, checks: result.checks, file: result.file
+        errors: result.errors, warnings: result.warnings, checks: result.checks, editMap: result.editMap, file: result.file
       });
     }
     const id = 'stm_' + crypto.randomBytes(6).toString('hex');

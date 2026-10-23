@@ -19,7 +19,8 @@ const expect = {
   'retyped-amount.pdf': { status: 422, codes: ['TEXT_REPLACED', 'EDITING_SOFTWARE', 'BALANCE_MISMATCH'] },
   'signed-then-altered.pdf': { status: 422, codes: ['SIGNATURE_BROKEN'] },
   // decrypted, edited in a content editor, re-encrypted with AES-256 and balanced (see test/make-reencrypted-fixture.py)
-  'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT'] }
+  'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT'],
+    editMap: { now: '1,85,000.00', digits: 5 } }
 };
 let failed = 0;
 try {
@@ -33,6 +34,12 @@ try {
     const r = await fetch(base + '/api/statements', { method: 'POST', body: fd });
     const body = await r.json();
     const codes = (body.errors || []).map((e) => e.code);
+    if (want.editMap) {
+      const e = body.editMap && body.editMap.edits.find((x) => x.after && x.after.text === want.editMap.now);
+      const good = e && e.before && e.before.digits === want.editMap.digits && body.editMap.fonts.length >= 1;
+      console.log(`${good ? 'PASS' : 'FAIL'}  edit map: "${want.editMap.now}" replaced a ${e && e.before ? e.before.digits : '?'}-digit value (${e && e.shift ? e.shift.width.toFixed(2) : '?'} pt wider)`);
+      if (!good) failed++;
+    }
     const ok = r.status === want.status && (!want.decision || body.decision === want.decision) && (!want.codes || want.codes.every((c) => codes.includes(c)));
     if (!ok) failed++;
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(26)} HTTP ${r.status} ${body.decision}  ${codes.join(' ')} (${Date.now() - t} ms)`);
