@@ -345,6 +345,38 @@ async function analyze(lib, bytes, opts = {}) {
     let balValue = bal.m.value;
     tx.push({ line: ln, bal: balValue, amt: amt.m.abs, amtTok: amt.t, side, alt: amts.length > 1 ? amts[0].m.abs : null });
   }
+  // narration codes: a statement's own codes pair consistently with debit or credit (e.g. UPIAR/…/DR/ on every debit)
+  {
+    const stats = new Map();
+    const seen = [];
+    for (const r of tx) {
+      const m = /(^|\s)([A-Z][A-Z0-9]{2,9})\/[^\s/]*\/(DR|CR)\//.exec(r.line.text);
+      const side = r.side || null;
+      if (!m || !side) continue;
+      const code = m[2], dir = m[3].toLowerCase();
+      const key = code + '|' + dir + '|' + side;
+      stats.set(key, (stats.get(key) || 0) + 1);
+      seen.push({ r, code, dir, side });
+    }
+    const totalFor = (code) => [...stats.entries()].filter(([k]) => k.startsWith(code + '|')).reduce((a, [, v]) => a + v, 0);
+    let reported = 0;
+    for (const x of seen) {
+      const n = totalFor(x.code);
+      const same = stats.get(x.code + '|' + x.dir + '|' + x.side) || 0;
+      const dirMismatch = (x.dir === 'cr') !== (x.side === 'cr');
+      const rare = n >= 30 && same / n < 0.01;
+      if ((dirMismatch || rare) && reported++ < 5) {
+        const usual = [...stats.entries()].filter(([k]) => k.startsWith(x.code + '|')).sort((a, b) => b[1] - a[1])[0];
+        const [, ud, us] = usual[0].split('|');
+        add({ code: 'NARRATION_CODE_MISMATCH', severity: 'high', page: x.r.line.page,
+          title: `Narration code doesn’t fit this statement on page ${x.r.line.page + 1}`,
+          detail: dirMismatch
+            ? `The narration says ${x.dir.toUpperCase()} but the amount is a ${x.side === 'cr' ? 'credit' : 'debit'}.`
+            : `In this statement ${x.code} appears on ${n} rows and is “/${ud.toUpperCase()}/” as a ${us === 'cr' ? 'credit' : 'debit'} on ${usual[1]} of them. This row is the only “${x.code}/…/${x.dir.toUpperCase()}/” ${x.side === 'cr' ? 'credit' : 'debit'}, which is what an edited direction looks like.`,
+          evidence: { text: x.r.line.text } });
+      }
+    }
+  }
   const recon = (prevBal, row) => {
     if (row.side === 'cr') return Math.abs(prevBal + row.amt - row.bal) <= 0.011;
     if (row.side === 'dr') return Math.abs(prevBal - row.amt - row.bal) <= 0.011;

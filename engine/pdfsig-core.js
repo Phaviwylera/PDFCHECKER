@@ -1667,6 +1667,7 @@ function textOpsDetailed(data, fonts) {
   const mul = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
   let ctm = [1, 0, 0, 1, 0, 0]; const ctmStack = [];
   let clips = 0, pendingClip = false, images = 0; const clipStack = [];
+  let btFirst = null, btTms = 0, btShown = false, btState = false, btFontKey = null, btSize = 0;
   let tm = [1, 0, 0, 1, 0, 0], tlm = [1, 0, 0, 1, 0, 0];
   let fontKey = null, font = null, size = 0, TL = 0, Tc = 0, Tw = 0, Tz = 100;
   let i = 0; const n = t.length;
@@ -1674,6 +1675,10 @@ function textOpsDetailed(data, fonts) {
   const codesOf = (str) => { const L = font ? font.codeLen : 1; const out = []; for (let k = 0; k + L <= str.length; k += L) { let c = 0; for (let j = 0; j < L; j++) c = (c << 8) | str[k + j]; out.push(c); } return out; };
   const show = (items, kind) => {
     const m = mul(tm, ctm);
+    const moved = !btShown && btFirst && btTms > 1 && Math.hypot(btFirst[0] - m[4], btFirst[1] - m[5]) > 0.3 ? { x: +btFirst[0].toFixed(2), y: +btFirst[1].toFixed(2) } : null;
+    const strs = items.filter((it) => it.str && it.str.length);
+    const perGlyph = strs.length >= 4 && strs.every((it) => it.str.length === (font ? font.codeLen : 1));
+    const inlineState = btState;
     let adv = 0, text = '', glyphs = 0, adjust = 0;
     for (const it of items) {
       if (it.str) {
@@ -1684,7 +1689,9 @@ function textOpsDetailed(data, fonts) {
     const hs = Tz / 100;
     const sx = Math.hypot(m[0], m[1]);
     ops.push({ fontKey, baseFont: font ? font.baseFont : null, fontRef: font ? font.ref : null, size: +(size * Math.abs(tm[3] || 1)).toFixed(3),
-      x: +m[4].toFixed(2), y: +m[5].toFixed(2), hscale: +(tm[0] * hs).toFixed(7), text, glyphs, adjust, width: +(adv * hs * sx).toFixed(2), kind, clipped: clips > 0, imagesBefore: images, seq: ops.length });
+      x: +m[4].toFixed(2), y: +m[5].toFixed(2), hscale: +(tm[0] * hs).toFixed(7), text, glyphs, adjust, width: +(adv * hs * sx).toFixed(2), kind, clipped: clips > 0, imagesBefore: images, seq: ops.length,
+      moved, perGlyph, inlineState });
+    btShown = true;
     tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + adv * hs * tm[0], tm[5] + adv * hs * tm[1]];
   };
   while (i < n) {
@@ -1710,15 +1717,18 @@ function textOpsDetailed(data, fonts) {
       case 'n': case 'f': case 'F': case 'f*': case 'S': case 's': case 'B': case 'B*': case 'b': case 'b*': if (pendingClip) { clips++; pendingClip = false; } break;
       case 'Do': images++; break;
       case 'cm': if (nums.length >= 6) ctm = mul(last(6), ctm); break;
-      case 'BT': tm = [1, 0, 0, 1, 0, 0]; tlm = tm; break;
-      case 'Tm': if (nums.length >= 6) { tm = last(6); tlm = tm; } break;
+      case 'BT': tm = [1, 0, 0, 1, 0, 0]; tlm = tm; btFirst = null; btTms = 0; btShown = false; btState = false; break;
+      case 'ET': if (!btShown && btFirst) ops.push({ kind: 'empty', fontKey: btFontKey, baseFont: font ? font.baseFont : null, fontRef: font ? font.ref : null, size: btSize,
+        x: +btFirst[0].toFixed(2), y: +btFirst[1].toFixed(2), width: 0, text: '', clipped: clips > 0, imagesBefore: images, seq: ops.length }); break;
+      case 'Tm': if (nums.length >= 6) { tm = last(6); tlm = tm; if (!btShown) { btTms++; if (!btFirst) { const m0 = mul(tm, ctm); btFirst = [m0[4], m0[5]]; } } } break;
+      case 'Tr': case 'Ts': case 'RG': case 'w': btState = true; break;
       case 'Td': case 'TD': if (nums.length >= 2) { const [tx, ty] = last(2); if (tok === 'TD') TL = -ty; tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] + tx * tlm[0] + ty * tlm[2], tlm[5] + tx * tlm[1] + ty * tlm[3]]; tm = tlm; } break;
       case 'T*': tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] - TL * tlm[2], tlm[5] - TL * tlm[3]]; tm = tlm; break;
       case 'TL': if (nums.length) TL = last(1)[0]; break;
       case 'Tc': if (nums.length) Tc = last(1)[0]; break;
       case 'Tw': if (nums.length) Tw = last(1)[0]; break;
-      case 'Tz': if (nums.length) Tz = last(1)[0]; break;
-      case 'Tf': { const nm = stack.find((x) => x.name); fontKey = nm ? nm.name : null; font = fontKey ? fonts.get(fontKey) || null : null; size = nums.length ? last(1)[0] : size; break; }
+      case 'Tz': if (nums.length) Tz = last(1)[0]; btState = true; break;
+      case 'Tf': { const nm = stack.find((x) => x.name); fontKey = nm ? nm.name : null; font = fontKey ? fonts.get(fontKey) || null : null; size = nums.length ? last(1)[0] : size; btFontKey = fontKey; btSize = size; break; }
       case 'Tj': { const s = stack[stack.length - 1]; if (s && s.str) show([s], 'text'); break; }
       case "'": case '"': { tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] - TL * tlm[2], tlm[5] - TL * tlm[3]]; tm = tlm; const s = stack[stack.length - 1]; if (s && s.str) show([s], 'text'); break; }
       case 'TJ': {
@@ -1750,13 +1760,13 @@ const digitRange = (d) => [d === 1 ? 0 : 10 ** (d - 1), 10 ** d - 0.01];
 function solveOriginals(rows, edits) {
   rows.sort((a, b) => a.page - b.page || b.y - a.y);
   const ALL = [[-1e12, 1e12]];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i++) {
     if (!(rows[i].amountEdit || rows[i].balanceEdit)) continue;
     let j = i;
     while (j + 1 < rows.length && (rows[j + 1].amountEdit || rows[j + 1].balanceEdit || rows[j].balanceEdit)) j++;
-    const start = rows[i - 1], seg = rows.slice(i, j + 1);
+    const start = i > 0 ? rows[i - 1] : null, seg = rows.slice(i, j + 1);
     i = j;
-    if (start.balanceEdit || seg[seg.length - 1].balanceEdit) continue;
+    if ((start && start.balanceEdit) || seg[seg.length - 1].balanceEdit) continue;
     // amount sets
     const A = seg.map((r) => {
       if (!r.amountEdit) return IV.pt(r.amount);
@@ -1774,7 +1784,7 @@ function solveOriginals(rows, edits) {
       const [lo, hi] = digitRange(d);
       return /\(?dr\)?$/i.test(r.balanceEdit.after ? r.balanceEdit.after.text : '') ? [[-hi, -lo]] : [[lo, hi]];
     });
-    const P = [IV.pt(start.balance), ...B.map((b) => b)];
+    const P = [start ? IV.pt(start.balance) : ALL, ...B.map((b) => b)];
     for (let it = 0; it < 6; it++) {
       for (let k = 1; k < P.length; k++) P[k] = IV.and(P[k], IV.add(P[k - 1], A[k - 1]));
       for (let k = P.length - 1; k >= 1; k--) P[k - 1] = IV.and(P[k - 1], IV.add(P[k], IV.neg(A[k - 1])));
@@ -1795,6 +1805,22 @@ function solveOriginals(rows, edits) {
 }
 
 /* Pairs each deleted-text spacer with the editor text drawn in its place and lists the fonts before and after. */
+function digitsFor(fm, em, newText) {
+  const money = /^([\d,]+)\.(\d\d)(.*)$/.exec((newText || '').trim());
+  if (!money || !fm) return null;
+  const enc = (ch) => { const code = fm.cmap ? [...fm.cmap.map.entries()].find(([, u]) => u === ch) : null; return code ? fm.width(code[0]) : fm.codeLen === 1 ? fm.width(ch.charCodeAt(0)) : fm.dw; };
+  const rest = '.' + money[2] + money[3];
+  const restW = [...rest].reduce((acc, ch) => acc + enc(ch), 0);
+  const dW = enc('0'), cW = enc(',');
+  const grouped = money[1].includes(',');
+  const indian = grouped && /,\d\d,/.test(money[1] + ',000');
+  const commas = (k) => (!grouped || k <= 3 ? 0 : indian ? Math.floor((k - 2) / 2) : Math.floor((k - 1) / 3));
+  const group = (k) => { const d = 'd'.repeat(k); if (!grouped || k <= 3) return d; const tail = d.slice(-3); let head = d.slice(0, -3); const parts = []; const step = indian ? 2 : 3; while (head.length > step) { parts.unshift(head.slice(-step)); head = head.slice(0, -step); } if (head) parts.unshift(head); return parts.concat(tail).join(','); };
+  for (let k = 1; k <= 13 && dW > 0; k++) {
+    if (Math.abs(k * dW + commas(k) * cW + restW - em) <= 0.08 * dW) return { digits: k, format: group(k) + '.dd' + money[3], range: [k === 1 ? 0 : 10 ** (k - 1), 10 ** k - 0.01] };
+  }
+  return null;
+}
 async function buildEditMap(scan, pages, isEditorKey) {
   const fontsById = new Map();
   const edits = [];
@@ -1817,9 +1843,13 @@ async function buildEditMap(scan, pages, isEditorKey) {
       const data = d ? await scan.streamData(d) : null;
       if (data) ops.push(...textOpsDetailed(data, fonts));
     }
-    for (const o of ops) { const e = fontsById.get(o.fontRef); if (e && o.kind === 'text') { e.runs++; if (isEditorKey(o.fontKey)) e.editorRuns++; } }
+    const textOps = ops.filter((o) => o.kind === 'text');
+    const unitShare = textOps.filter((o) => Math.abs(o.hscale - 1) < 1e-6).length / Math.max(1, textOps.length);
+    const isEdited = (o) => o.kind === 'text' && (isEditorKey(o.fontKey) || !!o.moved || (unitShare >= 0.9 && Math.abs(o.hscale - 1) > 1e-6 && (o.inlineState || o.perGlyph)));
+    for (const o of ops) { const e = fontsById.get(o.fontRef); if (e && o.kind === 'text') { e.runs++; if (isEdited(o)) e.editorRuns++; } }
     const blanks = ops.filter((o) => o.kind === 'blank');
-    const added = ops.filter((o) => o.kind === 'text' && isEditorKey(o.fontKey));
+    const added = ops.filter(isEdited);
+    const empties = ops.filter((o) => o.kind === 'empty');
     const used = new Set();
     for (const b of blanks) {
       const bL = b.x, bR = b.x + b.width;
@@ -1835,26 +1865,9 @@ async function buildEditMap(scan, pages, isEditorKey) {
       if (best != null) used.add(best);
       const fm = fonts.get(b.fontKey);
       const em = -b.adjust; // width in 1/1000 em
-      let digits = null, range = null, format = null;
-      const money = a && /^([\d,]+)\.(\d\d)(.*)$/.exec(a.text.trim());
       const enc = (ch) => { if (!fm) return 556; const code = fm.cmap ? [...fm.cmap.map.entries()].find(([, u]) => u === ch) : null; return code ? fm.width(code[0]) : fm.codeLen === 1 ? fm.width(ch.charCodeAt(0)) : fm.dw; };
-      if (money && fm) {
-        // same format as the new value, solve for the number of integer digits
-        const rest = '.' + money[2] + money[3];
-        const restW = [...rest].reduce((acc, ch) => acc + enc(ch), 0);
-        const dW = enc('0'), cW = enc(',');
-        const grouped = money[1].includes(',');
-        const indian = /\d,\d\d,\d{3}$/.test(money[1]) || (grouped && /^\d{1,2},\d{3}$/.test(money[1]) === false && /,\d\d,/.test(money[1]));
-        const commas = (k) => (!grouped || k <= 3 ? 0 : indian ? Math.floor((k - 2) / 2) : Math.floor((k - 1) / 3));
-        const group = (k) => { const d = 'd'.repeat(k); if (!grouped || k <= 3) return d; const tail = d.slice(-3); let head = d.slice(0, -3); const parts = []; const step = indian ? 2 : 3; while (head.length > step) { parts.unshift(head.slice(-step)); head = head.slice(0, -step); } if (head) parts.unshift(head); return parts.concat(tail).join(','); };
-        for (let k = 1; k <= 13 && dW > 0; k++) {
-          if (Math.abs(k * dW + commas(k) * cW + restW - em) <= 0.08 * dW) {
-            digits = k; format = group(k) + '.dd' + money[3];
-            range = [k === 1 ? 0 : 10 ** (k - 1), 10 ** k - 0.01];
-            break;
-          }
-        }
-      }
+      const dg = a ? digitsFor(fm, em, a.text) : null;
+      const digits = dg ? dg.digits : null, format = dg ? dg.format : null, range = dg ? dg.range : null;
       const avg = enc('0') || 556;
       edits.push({
         page: pi + 1, y: b.y,
@@ -1865,6 +1878,28 @@ async function buildEditMap(scan, pages, isEditorKey) {
         shift: a ? { left: +(a.x - bL).toFixed(2), right: +(a.x + a.width - bR).toFixed(2), width: +(a.width - b.width).toFixed(2), baseline: +(a.y - b.y).toFixed(3) } : null
       });
     }
+    // edits made in place: the original position survives as a Tm that was overridden before anything was drawn
+    const usedEmpty = new Set();
+    added.forEach((a, k) => {
+      if (used.has(k)) return;
+      let before = null;
+      const fm = fonts.get(a.fontKey);
+      if (a.moved) {
+        const right = a.x + a.width;
+        const w = +(right - a.moved.x).toFixed(2);
+        const em = Math.round((w / (a.size || 1)) * 1000);
+        const dg = w > 0 ? digitsFor(fm, em, a.text) : null;
+        before = { font: fm ? String(fm.baseFont).replace(/^\//, '') : null, resource: a.fontKey, size: a.size, x: a.moved.x, width: w, right: +right.toFixed(2), widthEm: em,
+          approxChars: Math.round(em / 556), digits: dg ? dg.digits : null, format: dg ? dg.format : null, range: dg ? dg.range : null, method: 'leftover position' };
+      } else {
+        const ei = empties.findIndex((x, j) => !usedEmpty.has(j) && Math.abs(x.y - a.y) <= 1.5 && Math.abs(x.x - a.x) <= 2);
+        if (ei >= 0) { usedEmpty.add(ei); const x = empties[ei]; before = { font: x.baseFont ? String(x.baseFont).replace(/^\//, '') : null, resource: x.fontKey, size: x.size, x: x.x, width: null, right: null, widthEm: null, approxChars: null, digits: null, format: null, range: null, method: 'deleted text block' }; }
+      }
+      if (!before) return;
+      used.add(k);
+      edits.push({ page: pi + 1, y: a.y, before, after: { text: a.text, font: a.baseFont ? String(a.baseFont).replace(/^\//, '') : null, resource: a.fontKey, size: a.size, x: a.x, width: a.width, right: +(a.x + a.width).toFixed(2), hscale: a.hscale, chars: a.text.length },
+        shift: before.width != null ? { left: +(a.x - before.x).toFixed(2), right: 0, width: +(a.width - before.width).toFixed(2), baseline: +(a.y - (a.moved ? a.moved.y : a.y)).toFixed(3) } : null });
+    });
     // drawing layer: does the editor's text sit where the bank's text sits?
     {
       const bank = ops.filter((o) => o.kind === 'text' && !isEditorKey(o.fontKey));
@@ -1890,8 +1925,8 @@ async function buildEditMap(scan, pages, isEditorKey) {
         const pageEdits = edits.filter((e) => e.page === pi + 1 && Math.abs(e.y - r.y) <= 1.5 && e.before);
         const cells = [];
         for (const o of r.ops.sort((p1, p2) => p1.x - p2.x)) {
-          if (o.kind === 'blank') continue;
-          if (isEditorKey(o.fontKey)) continue;
+          if (o.kind === 'blank' || o.kind === 'empty') continue;
+          if (isEdited(o)) continue;
           cells.push({ x: o.x, right: o.x + o.width, text: o.text.trim(), edit: null });
         }
         for (const e of pageEdits) cells.push({ x: e.before.x, right: e.before.right, text: e.after ? e.after.text.trim() : '', edit: e });
@@ -2196,8 +2231,9 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
   // file identifier
   const ids = scan.trailerKey('ID');
   if (Array.isArray(ids) && ids.length === 2 && ids[0] && ids[1] && ids[0].str && ids[1].str && !equalBytes(ids[0].str, ids[1].str) && !(sigs && sigs.length)) {
-    add({ code: 'ID_CHANGED', severity: 'low', category: 'structure', title: 'File identifier changed after creation',
-      detail: 'A PDF carries two IDs: one fixed when the file is created and one that changes whenever it is saved. They differ here, so the file was saved again at least once.' });
+    const hidden = revCount === 1 && !meta.ModDate && !(xmp && xmp.modifyDate);
+    add({ code: 'ID_CHANGED', severity: hidden ? 'medium' : 'low', category: 'structure', title: 'File identifier changed after creation',
+      detail: 'A PDF carries two IDs: one fixed when the file is created and one that changes whenever it is saved. They differ here, so the file was saved again at least once.' + (hidden ? ' The file records no modification date and shows only one save, so that later save left no other trace.' : '') });
   }
   if (scan.linearized && typeof scan.linearized.L === 'number' && scan.linearized.L !== bytes.length && revCount > 1) {
     add({ code: 'LINEARIZED_LENGTH', severity: 'low', category: 'structure', title: 'File grew after it was optimised for the web',
@@ -2414,6 +2450,8 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
   // ---- page-level traces of a content editor
   const EDITOR_FONT_KEYS = [[/^PSEditFont\d+$/, 'a PDF content editor']];
   const editorKeyPages = [], aliasPages = [], blankPages = [];
+  const inPlace = [], overridden = [];
+  let btTotal = 0, btSqueezed = 0;
   let editorKeys = 0, aliasCount = 0, blanks = 0, blankChars = 0;
   for (let pi = 0; pi < pagesNow.length; pi++) {
     const p = pagesNow[pi];
@@ -2441,11 +2479,37 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
       const re = /\[\s*(-\d+(?:\.\d+)?)\s*\]\s*TJ/g;
       let m;
       while ((m = re.exec(t))) { const w = -parseFloat(m[1]); if (w >= 1000) { n++; chars += Math.round(w / 556); } }
+      // in-place edits: text objects carrying settings and a near-1 squeeze the generator never writes,
+      // or a position overridden before anything was drawn
+      const btRe = /\bBT\b([\s\S]*?)\bET\b/g;
+      let b, total = 0, sq = 0;
+      while ((b = btRe.exec(t))) {
+        total++;
+        const body = b[1];
+        const tms = [...body.matchAll(/(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+Tm/g)];
+        const squeezed = tms.some((x) => { const a = +x[1], d = +x[4]; return a !== d && Math.abs(a - d) < 0.01 && Math.abs(a - 1) > 1e-6; });
+        const settings = /(^|\s)(\d+ Tr|[\d.]+ Tz|[\d.]+ [\d.]+ [\d.]+ RG)(\s|$)/.test(body);
+        if (squeezed) sq++;
+        if (squeezed && settings) inPlace.push({ page: pi });
+        // two placements before the first text is shown
+        const firstShow = body.search(/(\)|>|\])\s*(Tj|TJ|'|")/);
+        const head = firstShow < 0 ? body : body.slice(0, firstShow);
+        if ((head.match(/\bTm\b/g) || []).length >= 2) overridden.push({ page: pi });
+      }
+      btTotal += total; btSqueezed += sq;
     }
     if (n) { blanks += n; blankChars += chars; blankPages.push({ page: pi, count: n }); }
   }
   const pl = (list) => list.map((x) => x.page + 1).join(', ');
-  if (editorKeys || blanks) {
+  const inPages = [...new Set([...inPlace, ...overridden].map((x) => x.page))].sort((a, b) => a - b);
+  const genuineSqueezeRare = btTotal > 0 && btSqueezed / btTotal < 0.05;
+  if ((inPlace.length || overridden.length) && genuineSqueezeRare) {
+    add({ code: 'IN_PLACE_EDITS', severity: 'high', category: 'content', page: inPages[0],
+      title: `Text edited in place on page${inPages.length > 1 ? 's' : ''} ${inPages.map((x) => x + 1).join(', ')}`,
+      detail: `${inPlace.length} text object${inPlace.length === 1 ? '' : 's'} carry rendering settings and a horizontal squeeze that the rest of the document never uses${overridden.length ? `, and ${overridden.length} still hold their original position, overridden by a new one before anything was drawn` : ''}. This is what a PDF editor leaves when it retypes a value inside the existing page instead of adding new text, and it is invisible when the page is viewed.`,
+      evidence: { pages: inPages.map((x) => x + 1), squeezedWithSettings: inPlace.length, overriddenPositions: overridden.length, textObjects: btTotal } });
+  }
+  if (editorKeys || blanks || ((inPlace.length || overridden.length) && genuineSqueezeRare)) {
     try { info.editMap = await buildEditMap(scan, pagesNow, (k) => !!k && EDITOR_FONT_KEYS.some(([re]) => re.test(k))); }
     catch (e) { info.editMap = { error: String((e && e.message) || e) }; }
   }
@@ -2529,9 +2593,10 @@ const CHECK_DEFS = [
   ['fonts', 'Fonts of amounts and dates', ['FONT_MISMATCH', 'DUPLICATE_FONT_SUBSET']],
   ['align', 'Alignment of amounts', ['MISALIGNED']],
   ['math', 'Running balance and totals', ['BALANCE_MISMATCH', 'CLOSING_MISMATCH', 'TOTAL_MISMATCH']],
+  ['narration', 'Narration codes match debits and credits', ['NARRATION_CODE_MISMATCH']],
   ['overlay', 'Annotations and form fields', ['TEXT_ANNOTATION', 'MARKUP_ANNOTATION', 'FORM_FIELD_VALUE']],
   ['scan', 'Real text, not a scanned image', ['SCANNED', 'NO_TEXT']],
-  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'FONT_ALIASES', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED']],
+  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'IN_PLACE_EDITS', 'FONT_ALIASES', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED']],
   ['encryption', 'Encryption and re-saving', ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'ENCRYPTION_VERSION_MISMATCH', 'ENCRYPTION_NO_OWNER_LOCK', 'VERSION_RAISED']],
   ['active', 'Scripts and attachments', ['JAVASCRIPT', 'LAUNCH_ACTION', 'EMBEDDED_FILES', 'XFA_FORM']]
 ];
