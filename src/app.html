@@ -1,0 +1,1254 @@
+<title>Statement Guard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: an intake strip (drop zone + examples) over a two-column desk: results on the left, trust settings on the right. */
+:root {
+  --paper: #EEF2F5;
+  --surface: #FFFFFF;
+  --sunk: #F5F7F9;
+  --ink: #15212C;
+  --muted: #586776;
+  --line: #D5DDE4;
+  --line-strong: #B4C1CC;
+  --accent: #2443AE;
+  --accent-soft: #E3E9FB;
+  --on-accent: #FFFFFF;
+  --pass: #1B7347; --pass-bg: #E2F2E8;
+  --warn: #8F5A00; --warn-bg: #FAEFD7;
+  --fail: #B0261E; --fail-bg: #FBE5E2;
+  --info: #4D5D6C; --info-bg: #E8EDF2;
+  --gap-fill: #C9D3DC;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-label: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0E141A; --surface: #151D25; --sunk: #111820; --ink: #E4EAF0; --muted: #93A2B0;
+    --line: #27323D; --line-strong: #3A4856; --accent: #8EA6FF; --accent-soft: #1C2747; --on-accent: #0E141A;
+    --pass: #63CB92; --pass-bg: #11291C; --warn: #E9B24F; --warn-bg: #2E2410; --fail: #FF8B80; --fail-bg: #351613;
+    --info: #A8B5C1; --info-bg: #1B242D; --gap-fill: #34414E;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0E141A; --surface: #151D25; --sunk: #111820; --ink: #E4EAF0; --muted: #93A2B0;
+  --line: #27323D; --line-strong: #3A4856; --accent: #8EA6FF; --accent-soft: #1C2747; --on-accent: #0E141A;
+  --pass: #63CB92; --pass-bg: #11291C; --warn: #E9B24F; --warn-bg: #2E2410; --fail: #FF8B80; --fail-bg: #351613;
+  --info: #A8B5C1; --info-bg: #1B242D; --gap-fill: #34414E;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink);
+  font: 15px/1.55 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  -webkit-font-smoothing: antialiased;
+}
+body.dragging .drop { border-color: var(--accent); background: var(--accent-soft); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 72px; display: grid; gap: 22px; }
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { text-wrap: balance; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.eyebrow {
+  font-family: var(--font-label); font-weight: 600; font-size: 12px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+
+/* ---------- header and intake */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 36px; height: 36px; color: var(--accent); flex: none; }
+.top h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+.top .tagline { color: var(--muted); font-size: 14px; }
+.privacy { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.privacy svg { width: 14px; height: 14px; color: var(--pass); }
+
+.drop {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 20px;
+  background: var(--surface); border: 1.5px dashed var(--line-strong); border-radius: 12px;
+  padding: 18px 20px; transition: border-color .15s, background .15s;
+}
+.drop-main { display: flex; align-items: center; gap: 14px; flex: 1 1 320px; min-width: 0; }
+.drop-icon { width: 40px; height: 40px; flex: none; color: var(--accent); }
+.drop-text strong { display: block; font-weight: 600; }
+.drop-text span { color: var(--muted); font-size: 14px; }
+.examples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.examples .eyebrow { margin-right: 2px; }
+.chip {
+  border: 1px solid var(--line); background: var(--sunk); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; cursor: pointer;
+}
+.chip:hover { border-color: var(--line-strong); }
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  border: 1px solid var(--line-strong); background: var(--surface); border-radius: 8px;
+  padding: 7px 12px; font-size: 14px; font-weight: 500; line-height: 1.2; white-space: nowrap;
+}
+.btn:hover { background: var(--sunk); }
+.btn svg { width: 15px; height: 15px; flex: none; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.btn-small { padding: 4px 9px; font-size: 13px; border-radius: 6px; }
+.btn-link { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font-weight: 500; font-size: inherit; }
+.btn-link:hover { text-decoration: underline; }
+
+/* ---------- desk */
+.desk { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+@media (max-width: 920px) { .desk { grid-template-columns: minmax(0, 1fr); } }
+#main { display: grid; gap: 18px; min-width: 0; }
+
+.filebar {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px 20px;
+}
+.file-id { min-width: 0; display: grid; gap: 2px; }
+.fname { font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
+.fmeta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.fmeta code { color: var(--ink); }
+.file-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.note {
+  display: flex; gap: 10px; align-items: flex-start; font-size: 14px;
+  background: var(--accent-soft); border-radius: 10px; padding: 10px 14px;
+}
+.note svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--accent); }
+.note.warnish { background: var(--warn-bg); }
+.note.warnish svg { color: var(--warn); }
+
+/* overview */
+.overview { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.overview-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tally { font-weight: 600; }
+.ov-row {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  padding: 10px 16px; border: 0; border-top: 1px solid var(--line); background: none; width: 100%; text-align: left; cursor: pointer;
+}
+.ov-row:first-of-type { border-top: 0; }
+.ov-row:hover { background: var(--sunk); }
+.ov-row .ov-name { font-weight: 500; overflow-wrap: anywhere; }
+.ov-row .ov-sub { color: var(--muted); font-size: 13px; }
+.ov-row .ov-time { color: var(--muted); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .ov-row { grid-template-columns: 22px minmax(0, 1fr); } .ov-row .ov-time { grid-column: 2; text-align: left; } }
+
+.ico { width: 20px; height: 20px; flex: none; display: inline-block; vertical-align: middle; }
+.ico svg { width: 100%; height: 100%; display: block; }
+[data-state="pass"] > .ico, .ico.pass { color: var(--pass); }
+[data-state="warn"] > .ico, .ico.warn { color: var(--warn); }
+[data-state="fail"] > .ico, .ico.fail { color: var(--fail); }
+.ico.info { color: var(--info); }
+
+/* ---------- signature card */
+.sig { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; scroll-margin-top: 16px; }
+.verdict { display: flex; gap: 16px; align-items: flex-start; padding: 18px 20px; }
+.sig[data-state="pass"] .verdict { background: var(--pass-bg); }
+.sig[data-state="warn"] .verdict { background: var(--warn-bg); }
+.sig[data-state="fail"] .verdict { background: var(--fail-bg); }
+.seal { width: 40px; height: 40px; flex: none; }
+.sig[data-state="pass"] .seal { color: var(--pass); }
+.sig[data-state="warn"] .seal { color: var(--warn); }
+.sig[data-state="fail"] .seal { color: var(--fail); }
+.verdict-text { min-width: 0; display: grid; gap: 3px; }
+.verdict h2 { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+.verdict p.sub { font-size: 14.5px; max-width: 68ch; }
+
+.sig-body { padding: 4px 20px 20px; display: grid; gap: 20px; }
+.section-title { font-family: var(--font-label); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px 24px; margin: 16px 0 0; }
+.facts div { min-width: 0; }
+.facts dt { font-size: 12.5px; color: var(--muted); }
+.facts dd { margin: 1px 0 0; font-weight: 500; overflow-wrap: anywhere; }
+
+.checks { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.check { display: grid; grid-template-columns: 20px 170px minmax(0, 1fr); gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line); align-items: start; }
+.check:first-child { border-top: 0; }
+.check .ico { margin-top: 1px; }
+.check .lbl { font-weight: 500; }
+.check .det { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.check[data-state="fail"] { background: var(--fail-bg); }
+.check[data-state="fail"] .det { color: var(--ink); }
+@media (max-width: 620px) { .check { grid-template-columns: 20px minmax(0, 1fr); } .check .det { grid-column: 2; } }
+
+/* byte range bar */
+.bytes { display: grid; gap: 8px; }
+.bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 2px; background: var(--paper); }
+.seg { min-width: 4px; }
+.seg.signed { background: var(--pass); }
+.seg.gap { background: repeating-linear-gradient(135deg, var(--gap-fill) 0 4px, transparent 4px 7px); background-color: var(--sunk); }
+.seg.after { background: var(--warn); }
+.seg.later { background: var(--info); opacity: 0.55; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* chain */
+.chain { list-style: none; margin: 0; padding: 0; display: grid; }
+.node { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 0 14px; position: relative; }
+.node::before { content: ""; position: absolute; left: 10px; top: 24px; bottom: -2px; width: 2px; background: var(--line-strong); }
+.node:last-child::before { display: none; }
+.node .dot { width: 22px; height: 22px; margin-top: 2px; position: relative; z-index: 1; background: var(--surface); border-radius: 50%; }
+.node-body { padding-bottom: 16px; min-width: 0; display: grid; gap: 2px; }
+.node-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag { font-family: var(--font-label); font-weight: 600; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--sunk); border: 1px solid var(--line); color: var(--muted); }
+.tag.anchor { color: var(--pass); border-color: currentColor; background: transparent; }
+.tag.origin { text-transform: none; letter-spacing: 0; font-family: var(--font-body); font-weight: 500; font-size: 12px; }
+.node-name { font-weight: 600; font-size: 15.5px; overflow-wrap: anywhere; }
+.node-sub { color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+.issues { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 2px; font-size: 13.5px; }
+.issues li { display: flex; gap: 6px; align-items: flex-start; }
+.issues li .ico { width: 15px; height: 15px; margin-top: 3px; }
+.node.terminal .node-name { font-weight: 500; }
+.node-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+details.certdet { margin-top: 4px; }
+details.certdet summary { cursor: pointer; color: var(--accent); font-size: 13.5px; font-weight: 500; width: max-content; max-width: 100%; }
+.kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 14px; margin: 10px 0 4px; font-size: 13.5px; background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv dd.mono { word-break: break-all; }
+@media (max-width: 560px) { .kv { grid-template-columns: minmax(0, 1fr); gap: 0; } .kv dd { margin-bottom: 8px; } }
+
+.sig-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+/* states */
+.panel-msg { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; display: grid; gap: 8px; justify-items: start; }
+.panel-msg h2 { font-size: 19px; font-weight: 600; }
+.panel-msg p { color: var(--muted); max-width: 62ch; }
+.spinner { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+/* ---------- aside */
+aside { display: grid; gap: 16px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: grid; gap: 16px; }
+.panel h3 { font-size: 16px; font-weight: 600; }
+.panel fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.panel legend { padding: 0; margin-bottom: 6px; }
+.hint { font-size: 13px; color: var(--muted); }
+.opt { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+.opt input { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.opt small { display: block; color: var(--muted); font-size: 12.5px; }
+.ucerts { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.ucert { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; font-size: 13.5px; }
+.ucert-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.ucert-name { font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.ucert-sub { color: var(--muted); font-size: 12.5px; }
+.ucert .opt { font-size: 13px; }
+.icon-btn { border: 0; background: none; padding: 2px; cursor: pointer; color: var(--muted); border-radius: 4px; flex: none; }
+.icon-btn:hover { color: var(--fail); }
+.icon-btn svg { width: 16px; height: 16px; display: block; }
+input[type="datetime-local"] { font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 8px; width: 100%; max-width: 260px; }
+input[type="datetime-local"]:disabled { opacity: 0.5; }
+.scope { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; font-size: 13.5px; }
+.scope li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; }
+.scope .ico { width: 16px; height: 16px; margin-top: 2px; }
+.scope b { font-weight: 600; }
+
+/* toast and modal */
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--paper); padding: 9px 16px; border-radius: 8px; font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 50; max-width: calc(100vw - 32px);
+}
+.modal-back { position: fixed; inset: 0; background: rgba(10, 16, 22, .5); display: grid; place-items: center; z-index: 40; padding: 16px; }
+.modal { background: var(--surface); border-radius: 14px; padding: 20px; width: min(640px, 100%); max-height: calc(100vh - 32px); display: grid; gap: 12px; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.modal h3 { font-size: 17px; font-weight: 600; }
+.modal p { color: var(--muted); font-size: 14px; }
+.modal textarea { width: 100%; min-height: 220px; font-family: var(--font-mono); font-size: 12px; background: var(--sunk); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 10px; resize: vertical; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* examples */
+.examples { flex-basis: 100%; display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ex-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.ex-group .eyebrow { min-width: 96px; }
+
+/* upload gate */
+.gate { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.gate-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 18px 20px; }
+.gate[data-decision="reject"] .gate-head { background: var(--fail-bg); }
+.gate[data-decision="review"] .gate-head { background: var(--warn-bg); }
+.gate[data-decision="accept"] .gate-head { background: var(--pass-bg); }
+.gate-icon { width: 40px; height: 40px; }
+.gate[data-decision="reject"] .gate-icon { color: var(--fail); }
+.gate[data-decision="review"] .gate-icon { color: var(--warn); }
+.gate[data-decision="accept"] .gate-icon { color: var(--pass); }
+.gate-head h2 { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+.gate-head .sub { font-size: 14.5px; max-width: 64ch; margin-top: 3px; }
+.risk { display: grid; justify-items: end; line-height: 1; padding-top: 2px; }
+.risk-num { font-family: var(--font-mono); font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.gate[data-decision="reject"] .risk-num { color: var(--fail); }
+.gate[data-decision="review"] .risk-num { color: var(--warn); }
+.gate[data-decision="accept"] .risk-num { color: var(--pass); }
+.risk-lbl { font-family: var(--font-label); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+@media (max-width: 560px) { .gate-head { grid-template-columns: 32px minmax(0, 1fr); } .gate-icon { width: 32px; height: 32px; } .risk { grid-column: 2; justify-items: start; grid-auto-flow: column; gap: 6px; align-items: baseline; } }
+.gate-body { padding: 6px 20px 20px; display: grid; gap: 18px; }
+.findings { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.finding { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 14px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.finding:first-child { border-top: 0; }
+.sev { font-family: var(--font-label); font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; justify-self: start; height: max-content; margin-top: 1px; }
+.finding[data-sev="high"] .sev { background: var(--fail-bg); color: var(--fail); }
+.finding[data-sev="medium"] .sev { background: var(--warn-bg); color: var(--warn); }
+.finding[data-sev="low"] .sev, .finding[data-sev="info"] .sev { background: var(--info-bg); color: var(--info); }
+.finding[data-sev="good"] .sev { background: var(--pass-bg); color: var(--pass); }
+.finding h3 { font-size: 15px; font-weight: 600; }
+.finding p { color: var(--muted); font-size: 14px; margin-top: 2px; max-width: 76ch; }
+.f-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.pg { font-size: 12px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
+.code-tag { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.ev { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-family: var(--font-mono); font-size: 13px; }
+.ev .lbl { font-family: var(--font-label); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ev .was { text-decoration: line-through; text-decoration-color: var(--fail); color: var(--muted); background: var(--sunk); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; overflow-wrap: anywhere; }
+.ev .now { color: var(--ink); background: var(--fail-bg); border-radius: 5px; padding: 1px 7px; font-weight: 500; overflow-wrap: anywhere; }
+.ev .arrow { color: var(--muted); }
+.ev-line { margin-top: 8px; font-family: var(--font-mono); font-size: 12.5px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre; }
+@media (max-width: 560px) { .finding { grid-template-columns: minmax(0, 1fr); } }
+details.minor > summary { cursor: pointer; color: var(--accent); font-weight: 500; font-size: 14px; width: max-content; max-width: 100%; }
+details.minor[open] > summary { margin-bottom: 10px; }
+.checkgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 24px; }
+.ck { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.ck .ico { width: 18px; height: 18px; margin-top: 1px; }
+.ck .ck-note { display: block; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.ck[data-state="skip"] .ck-label, .ck[data-state="none"] .ck-label { color: var(--muted); }
+.sigs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.sigs-head h2 { font-size: 18px; font-weight: 600; }
+
+/* server upload */
+.server { border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 12px; }
+.server-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.server-row p { color: var(--muted); font-size: 14px; max-width: 60ch; }
+.server-result { border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; font-size: 14px; }
+.server-result[data-status="ok"] { background: var(--pass-bg); }
+.server-result[data-status="review"] { background: var(--warn-bg); }
+.server-result[data-status="rejected"], .server-result[data-status="error"] { background: var(--fail-bg); }
+.server-result h4 { margin: 0; font-size: 15px; font-weight: 600; }
+.server-result code { font-size: 12.5px; }
+.server-result ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.uploads { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.uploads li { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; display: grid; gap: 2px; }
+.uploads .u-top { display: flex; justify-content: space-between; gap: 8px; }
+.uploads .u-name { font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.uploads .u-sub { color: var(--muted); font-size: 12.5px; }
+.pill { font-size: 11.5px; font-weight: 600; border-radius: 999px; padding: 1px 8px; white-space: nowrap; height: max-content; }
+.pill.accept { background: var(--pass-bg); color: var(--pass); }
+.pill.review { background: var(--warn-bg); color: var(--warn); }
+
+/* unlock form */
+.unlock { background: var(--warn-bg); border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; }
+.unlock-head { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.unlock-head svg { width: 20px; height: 20px; flex: none; color: var(--warn); margin-top: 1px; }
+.unlock-head strong { font-weight: 600; }
+.unlock-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-left: 30px; }
+.pw-wrap { position: relative; flex: 1 1 220px; max-width: 340px; min-width: 0; }
+.pw-wrap input { width: 100%; font: inherit; font-size: 14.5px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 64px 7px 10px; }
+.pw-wrap input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pw-wrap .btn-link { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 13px; }
+.unlock-err { color: var(--fail); font-size: 13.5px; font-weight: 500; padding-left: 30px; }
+.facts dd .btn-link { font-weight: 500; }
+.lock { display: inline-flex; align-items: center; gap: 4px; }
+.lock svg { width: 12px; height: 12px; }
+
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><path d="M8 3h14l7 7v23H8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M22 3v7h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="18.5" cy="21" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.8 21.2l1.9 1.9 3.6-3.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <h1>Statement Guard</h1>
+        <p class="tagline">Catches edited bank statements at upload, and validates digital signatures and certificate chains.</p>
+      </div>
+    </div>
+    <p class="privacy"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.9-5.5 6.8-3.2-.9-5.5-3.5-5.5-6.8V3.5z" fill="currentColor"/></svg>Checked in your browser first. The file reaches the server only when you press Upload.</p>
+  </header>
+
+  <section class="drop" id="drop" aria-label="Choose a PDF">
+    <div class="drop-main">
+      <svg class="drop-icon" viewBox="0 0 40 40" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="10" fill="var(--accent-soft)"/><path d="M20 27V13m0 0l-5.5 5.5M20 13l5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="drop-text">
+        <strong>Drop a bank statement or signed PDF</strong>
+        <span>or <button class="btn-link" data-action="pick-pdf">choose a file</button>. Large files may take a few seconds.</span>
+      </div>
+      <input type="file" id="pdf-input" accept=".pdf,application/pdf" class="visually-hidden" tabindex="-1">
+    </div>
+    <div class="examples" id="examples"></div>
+  </section>
+
+  <div class="desk">
+    <main id="main" aria-live="polite"></main>
+    <aside>
+      <section class="panel" aria-labelledby="settings-title">
+        <h3 id="settings-title">Certificates and time</h3>
+
+        <fieldset>
+          <legend class="eyebrow">Trusted roots</legend>
+          <label class="opt"><input type="checkbox" id="use-mozilla" checked>
+            <span>Mozilla root store <small id="mozilla-meta"></small></span></label>
+          <p class="hint">These are Mozilla’s roots for websites. Many commercial document-signing CAs chain to them. Adobe’s AATL, EU trusted lists and national roots such as CCA India are not included, so add those roots below to trust them.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend class="eyebrow">Your certificates</legend>
+          <ul class="ucerts" id="ucerts"></ul>
+          <div><button class="btn btn-small" data-action="pick-cert">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Add certificates</button></div>
+          <input type="file" id="cert-input" multiple accept=".pem,.crt,.cer,.der,.p7b,.p7c,.txt,application/x-x509-ca-cert,application/pkix-cert" class="visually-hidden" tabindex="-1">
+          <p class="hint">PEM, DER (.cer, .crt) or PKCS#7 (.p7b). Self-signed roots are trusted when added; other certificates only help complete chains. Kept in this browser only.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend class="eyebrow">Validate certificates as of</legend>
+          <label class="opt"><input type="radio" name="at" value="auto" id="at-auto" checked>
+            <span>Signing time <small>The trusted timestamp if there is one, otherwise now</small></span></label>
+          <label class="opt"><input type="radio" name="at" value="custom" id="at-custom">
+            <span>A date I choose</span></label>
+          <input type="datetime-local" id="at-value" disabled aria-label="Validation date and time">
+        </fieldset>
+      </section>
+
+      <section class="panel" id="uploads-panel" aria-labelledby="uploads-title" hidden>
+        <h3 id="uploads-title">Stored on the server</h3>
+        <ul class="uploads" id="uploads"></ul>
+        <p class="hint">Kept by this server instance only. Rejected files are never stored.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="scope-title">
+        <h3 id="scope-title">What gets checked</h3>
+        <ul class="scope" id="scope"></ul>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script>/*ROOTS*/</script>
+<script>/*SAMPLES*/</script>
+<script>/*CORE*/</script>
+<script>/*CONTENT*/</script>
+<script>
+(function () {
+'use strict';
+const S = window.PDFSig;
+const ROOTS = window.PDFSIG_ROOTS;
+const SAMPLES = window.PDFSIG_SAMPLES;
+const LS_KEY = 'pdfsig.userCerts.v1';
+
+const state = {
+  mozilla: [], useMozilla: true, user: [], testRoot: null,
+  atMode: 'auto', atValue: '',
+  file: null, result: null, checkedAt: null, busy: false, error: null, runId: 0
+};
+let certIndex = new Map();
+
+/* ---------------------------------------------------------------- helpers */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nf = new Intl.NumberFormat('en-US');
+const DT = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+const DD = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+const fmt = (d) => (d ? DT.format(d) : '');
+const fmtD = (d) => (d ? DD.format(d) : '');
+const size = (n) => (n < 1024 ? n + ' bytes' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+const base = (name) => (name || 'document').replace(/\.pdf$/i, '');
+const safe = (s) => (s || 'certificate').replace(/[^\w.\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'certificate';
+const cname = (c) => S.nameLabel(c.subject);
+const SUBFILTERS = {
+  'adbe.pkcs7.detached': 'PKCS#7 detached', 'adbe.pkcs7.sha1': 'PKCS#7 SHA-1 (legacy)', 'adbe.x509.rsa_sha1': 'X.509 RSA-SHA1 (legacy)',
+  'ETSI.CAdES.detached': 'PAdES (CAdES detached)', 'ETSI.RFC3161': 'Document timestamp'
+};
+const MDP = { 1: 'no changes allowed', 2: 'form filling and signing allowed', 3: 'form filling, signing and comments allowed' };
+const ORIGIN = { embedded: 'Embedded in PDF', user: 'Added by you', store: 'Mozilla root store' };
+
+const ICON = {
+  pass: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M6 10.3l2.7 2.7 5.3-5.6" fill="none" stroke="var(--surface)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.6l9 16.2H1z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M10 7.2v4.9" stroke="var(--surface)" stroke-width="2" stroke-linecap="round"/><circle cx="10" cy="14.9" r="1.15" fill="var(--surface)"/></svg>',
+  fail: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M6.8 6.8l6.4 6.4M13.2 6.8l-6.4 6.4" stroke="var(--surface)" stroke-width="2" stroke-linecap="round"/></svg>',
+  info: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M10 9v5.2" stroke="var(--surface)" stroke-width="2" stroke-linecap="round"/><circle cx="10" cy="6.1" r="1.15" fill="var(--surface)"/></svg>',
+  none: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.4"/></svg>'
+};
+const ico = (st, extra = '') => `<span class="ico ${st} ${extra}">${ICON[st] || ICON.info}</span>`;
+const SVG = {
+  download: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L4.8 6.8M8 10l3.2-3.2M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  copy: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  shield: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.9-5.5 6.8-3.2-.9-5.5-3.5-5.5-6.8V3.5z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.7 8l1.6 1.6 3-3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  plus: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  x: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  infoNote: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="6.2" r="1.1" fill="currentColor"/></svg>',
+  lock: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="8.5" width="13" height="9.5" rx="2" fill="currentColor"/><path d="M6.5 8.5V6a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  unlock: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="8.5" width="13" height="9.5" rx="2" fill="currentColor"/><path d="M6.5 8.5V6a3.5 3.5 0 0 1 6.8-1.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
+};
+
+function toast(msg) {
+  const old = $('.toast'); if (old) old.remove();
+  const t = document.createElement('div');
+  t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+function modal(title, body, text) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title">
+    <h3 id="m-title">${esc(title)}</h3><p>${esc(body)}</p>
+    <textarea id="m-text" readonly spellcheck="false"></textarea>
+    <div class="modal-actions"><button class="btn" data-m="close">Close</button><button class="btn btn-primary" data-m="copy">${SVG.copy}Copy</button></div></div>`;
+  document.body.appendChild(back);
+  const ta = $('#m-text', back); ta.value = text;
+  const close = () => back.remove();
+  back.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-m]');
+    if (e.target === back || (b && b.dataset.m === 'close')) return close();
+    if (b && b.dataset.m === 'copy') copyText(text, ta);
+  });
+  back.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  $('[data-m="copy"]', back).focus();
+}
+
+function copyText(text, fallbackEl) {
+  try {
+    const p = navigator.clipboard && navigator.clipboard.writeText(text);
+    if (!p) throw new Error('no clipboard');
+    p.then(() => toast('Copied to clipboard'), () => fallbackCopy(text, fallbackEl));
+  } catch (e) { fallbackCopy(text, fallbackEl); }
+}
+function fallbackCopy(text, el) {
+  if (el) { el.focus(); el.select(); toast('Press Ctrl+C or ⌘C to copy the selected text'); }
+  else modal('Copy text', 'Copying is blocked here. Select the text below and copy it.', text);
+}
+
+/* ---------------------------------------------------------------- downloads */
+let dlPromise = null;
+function getDownloads() {
+  if (!dlPromise) {
+    const c = window.claude;
+    dlPromise = c && typeof c.use === 'function' ? Promise.resolve(c.use('downloads')).catch(() => null) : Promise.resolve(null);
+  }
+  return dlPromise;
+}
+async function saveFile(filename, data, fallbackText) {
+  const d = await getDownloads();
+  const fallback = () => modal('Saving files isn’t available here', 'You can copy the contents instead.', fallbackText);
+  if (!d) {
+    try {
+      const blob = data instanceof Blob ? data : new Blob([data]);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      return;
+    } catch (e) { return fallback(); }
+  }
+  try {
+    const r = await d.save({ filename, data });
+    if (!r || r.status === 'saved') toast('Saved ' + filename);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'declined') return;
+    if (code === 'rate_limited') return toast('A save prompt is already open.');
+    if (code === 'too_large') return toast('That file is too large to save here.');
+    fallback();
+  }
+}
+
+/* minimal ZIP writer (stored, no compression) */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = (u8) => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+function zip(files) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    const data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+    const crc = crc32(data);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true);
+    lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, dosTime, true); ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true);
+    ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, name.length, true);
+    ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + data.length;
+  }
+  const cdSize = central.reduce((n, p) => n + p.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
+
+/* ---------------------------------------------------------------- trust settings */
+function persistUser() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state.user.map((u) => ({ b64: S.b64encode(u.cert.der), trusted: u.trusted })))); } catch (e) { /* storage unavailable */ }
+}
+async function restoreUser() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch (e) { saved = []; }
+  for (const s of saved) {
+    try { const cert = await S.loadCert(S.b64decode(s.b64)); if (!state.user.some((u) => u.cert.sha256 === cert.sha256)) state.user.push({ cert, trusted: !!s.trusted }); } catch (e) { /* skip */ }
+  }
+}
+function addUserCert(cert, trusted) {
+  const ex = state.user.find((u) => u.cert.sha256 === cert.sha256);
+  if (ex) { if (trusted) ex.trusted = true; return false; }
+  state.user.push({ cert, trusted });
+  return true;
+}
+async function addCertFiles(fileList) {
+  let added = 0, bad = 0;
+  for (const f of fileList) {
+    try {
+      const certs = await S.parseCertBundle(new Uint8Array(await f.arrayBuffer()));
+      if (!certs.length) { bad++; continue; }
+      for (const c of certs) if (addUserCert(c, c.selfIssued)) added++;
+    } catch (e) { bad++; }
+  }
+  persistUser(); renderUserCerts();
+  if (bad) toast(`${bad} file${bad === 1 ? '' : 's'} could not be read as certificates.`);
+  else toast(added ? `Added ${added} certificate${added === 1 ? '' : 's'}` : 'Those certificates were already added');
+  run();
+}
+function renderUserCerts() {
+  const ul = $('#ucerts');
+  if (!state.user.length) { ul.innerHTML = '<li class="hint">None added.</li>'; return; }
+  ul.innerHTML = state.user.map((u, i) => `<li class="ucert">
+    <div class="ucert-top"><span class="ucert-name">${esc(cname(u.cert))}</span>
+      <button class="icon-btn" data-action="remove-cert" data-i="${i}" aria-label="Remove ${esc(cname(u.cert))}">${SVG.x}</button></div>
+    <span class="ucert-sub">${u.cert.selfIssued ? 'Self-signed root' : 'Issued by ' + esc(S.nameLabel(u.cert.issuer))} · expires ${esc(fmtD(u.cert.notAfter))}</span>
+    <label class="opt"><input type="checkbox" data-action="toggle-trust" data-i="${i}" ${u.trusted ? 'checked' : ''}><span>Trust as a root</span></label>
+  </li>`).join('');
+}
+function renderScope() {
+  const items = [
+    ['pass', '<b>Edit history.</b> Reads every saved revision inside the file and recovers text that was replaced, added or removed.'],
+    ['pass', '<b>Software and dates.</b> Flags PDF editors, office tools, print-to-PDF and impossible or mismatched dates.'],
+    ['pass', '<b>Page content.</b> Finds white boxes and images pasted over text, overprinted text, odd fonts and misaligned amounts.'],
+    ['pass', '<b>Arithmetic.</b> Re-adds the running balance row by row and checks the totals.'],
+    ['pass', '<b>Signature integrity.</b> Recomputes the hash of the signed byte ranges and compares it with the one inside the signature.'],
+    ['pass', '<b>Signature value.</b> Verifies RSA, RSA-PSS, ECDSA and Ed25519 signatures with the signer’s public key.'],
+    ['pass', '<b>Certificate chain.</b> Builds the path to a trusted root, checking every link’s signature, validity dates, CA flags, key usage and path length.'],
+    ['pass', '<b>Timestamps.</b> Verifies RFC 3161 signature and document timestamps, and uses a trusted time to judge certificate validity.'],
+    ['pass', '<b>Coverage.</b> Reports bytes added after each signature.'],
+    ['pass', '<b>Encrypted PDFs.</b> Opens RC4, AES-128 and AES-256 files, and asks for the password only when the file needs one.'],
+    ['none', '<b>Not checked:</b> pixels inside scanned images, whether the bank really issued the statement, and certificate revocation (a web page cannot reach OCSP or CRL servers).']
+  ];
+  $('#scope').innerHTML = items.map(([s, t]) => `<li>${ico(s === 'none' ? 'info' : s)}<span>${t}</span></li>`).join('');
+}
+
+/* ---------------------------------------------------------------- running */
+async function run() {
+  if (!state.file) return;
+  const id = ++state.runId;
+  state.busy = true; renderMain();
+  await new Promise((r) => setTimeout(r, 20));
+  try {
+    const anchors = state.useMozilla ? state.mozilla.slice() : [];
+    if (state.file.sample && state.file.sample.trustTestRoot && state.testRoot) anchors.push(state.testRoot);
+    let at = null;
+    if (state.atMode === 'custom' && state.atValue) { at = new Date(state.atValue); if (isNaN(at)) at = null; }
+    const now = new Date();
+    const res = await S.validatePDF(state.file.bytes, { anchors, extra: state.user.map((u) => ({ cert: u.cert, trusted: u.trusted })), at, now, password: state.file.password });
+    if (id !== state.runId) return;
+    let content;
+    const lib = window.pdfjsLib;
+    if (!lib || !window.PDFSigContent) content = { unavailable: true, reason: 'The page-content checker didn’t load, so fonts, cover-ups and balances weren’t checked. Structure, metadata and signature checks still ran.' };
+    else {
+      try { content = await window.PDFSigContent.analyze(lib, state.file.bytes, { password: state.file.password || '' }); }
+      catch (e) { content = { unavailable: true, reason: 'The page-content checks stopped with an error: ' + ((e && e.message) || e) }; }
+    }
+    if (id !== state.runId) return;
+    state.result = res; state.content = content; state.integrity = S.integrityVerdict(res, content);
+    state.checkedAt = now; state.error = null; state.atUsed = at;
+  } catch (e) {
+    if (id !== state.runId) return;
+    state.result = null; state.error = (e && e.message) || String(e);
+  }
+  state.busy = false; renderMain();
+  const pw = $('#pdf-password');
+  if (pw && state.focusPassword) pw.focus();
+  state.focusPassword = false;
+}
+async function openFile(file) {
+  if (!file) return;
+  if (!/\.pdf$/i.test(file.name) && file.type && file.type !== 'application/pdf') { /* still try: content decides */ }
+  state.file = { name: file.name, size: file.size, bytes: null, sample: null };
+  state.busy = true; renderMain(); markExample(null);
+  try { state.file.bytes = new Uint8Array(await file.arrayBuffer()); }
+  catch (e) { state.busy = false; state.error = 'The file could not be read.'; state.result = null; renderMain(); return; }
+  run();
+}
+function openSample(idx) {
+  const s = SAMPLES.items.find((x) => x.id === idx);
+  if (!s) return;
+  if (!s.bytes) s.bytes = S.b64decode(s.b64);
+  state.file = { name: s.file, size: s.bytes.length, bytes: s.bytes, sample: s };
+  markExample(idx);
+  run();
+}
+function markExample(idx) {
+  document.querySelectorAll('#examples .chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.id === idx)));
+}
+
+/* ---------------------------------------------------------------- rendering */
+function originLabel(e) {
+  if (state.testRoot && e.cert.sha256 === state.testRoot.sha256 && e.origin === 'store') return 'Trusted for this example';
+  return ORIGIN[e.origin] || e.origin;
+}
+function signerTime(r) {
+  if (r.timestamp && r.timestamp.ok && r.timestamp.genTime) return { d: r.timestamp.genTime, how: 'trusted timestamp' };
+  const d = r.signingTime || r.claimedTime;
+  return d ? { d, how: 'signer’s clock' } : null;
+}
+function signerEmail(c) {
+  if (!c) return '';
+  const e = c.ext.san.find((x) => x.startsWith('email:'));
+  return e ? e.slice(6) : c.subject.get('emailAddress');
+}
+function tallyText(sigs) {
+  const n = { pass: 0, warn: 0, fail: 0 };
+  sigs.forEach((s) => n[s.verdict.state]++);
+  const parts = [];
+  if (n.pass) parts.push(`${n.pass} valid`);
+  if (n.warn) parts.push(`${n.warn} with warnings`);
+  if (n.fail) parts.push(`${n.fail} invalid`);
+  return `${sigs.length} signature${sigs.length === 1 ? '' : 's'}: ${parts.join(', ')}`;
+}
+
+function renderMain() {
+  const main = $('#main');
+  certIndex = new Map();
+  if (state.busy) {
+    main.innerHTML = `<div class="panel-msg"><div class="spinner" aria-hidden="true"></div><h2>Checking ${esc(state.file ? state.file.name : 'file')}</h2><p>Reading the file’s edit history, page content, balances and signatures.</p></div>`;
+    return;
+  }
+  if (state.error) {
+    main.innerHTML = `<div class="panel-msg" data-state="fail">${ico('fail')}<h2>This file couldn’t be checked</h2><p>${esc(state.error)}</p><button class="btn" data-action="pick-pdf">Choose another file</button></div>`;
+    return;
+  }
+  const res = state.result;
+  if (!res) { main.innerHTML = ''; return; }
+  const f = state.file;
+  const sigs = res.signatures;
+  let html = `<section class="filebar">
+    <div class="file-id"><p class="eyebrow">${f.sample ? 'Example file' : 'Checked file'}</p>
+      <h2 class="fname">${esc(f.name)}</h2>
+      <p class="fmeta"><span>${esc(size(res.fileSize))}</span><span>${res.revisions} revision${res.revisions === 1 ? '' : 's'}</span>
+        ${res.encryption ? `<span class="lock">${res.encryption.unlocked ? SVG.unlock : SVG.lock}Encrypted${res.encryption.label ? ' · ' + esc(res.encryption.label) : ''}</span>` : ''}
+        <span>SHA-256 <code title="${esc(res.sha256)}">${esc(res.sha256.slice(0, 16))}…</code> <button class="btn-link" data-action="copy-hash">Copy</button></span>
+        <span>Checked ${esc(fmt(state.checkedAt))}</span></p></div>
+    <div class="file-actions">
+      <button class="btn" data-action="dl-report-txt">${SVG.download}Report (.txt)</button>
+      <button class="btn" data-action="dl-report-json">${SVG.download}Report (.json)</button>
+      ${sigs.length ? `<button class="btn" data-action="dl-all">${SVG.download}Certificates (.zip)</button>` : ''}</div>
+  </section>`;
+  if (f.sample) html += `<div class="note">${SVG.infoNote}<span><b>Example.</b> ${esc(f.sample.note)} ${f.sample.trustTestRoot ? 'Its test root is trusted only while you view the examples.' : ''} Drop your own PDF to check it.</span></div>`;
+  if (state.atUsed) html += `<div class="note warnish">${SVG.infoNote}<span>Certificates are being checked as of ${esc(fmt(state.atUsed))}, the date you chose under “Certificates and time”.</span></div>`;
+  html += encryptionBlock(res);
+  html += renderGate(state.integrity);
+  html += `<div class="sigs-head"><h2>Digital signatures</h2><span class="hint">${sigs.length ? esc(tallyText(sigs)) : 'None'}</span></div>`;
+  if (!sigs.length) {
+    html += `<div class="panel-msg">${ico('info')}<h2>Not digitally signed</h2>
+      <p>This PDF has no signed signature fields, so only the checks above apply. Some banks sign the statements you download from net banking; a signed original is the strongest proof that nothing was changed. A drawn signature or an image of one is not a digital signature.</p></div>`;
+    main.innerHTML = html;
+    return;
+  }
+  if (sigs.length > 1) {
+    html += `<section class="overview"><div class="overview-head"><span class="tally">${esc(tallyText(sigs))}</span><span class="hint">In signing order</span></div>
+      ${sigs.map((s, i) => { const t = signerTime(s); return `<button class="ov-row" data-action="goto" data-i="${i}" data-state="${s.verdict.state}">${ico(s.verdict.state)}
+        <span><span class="ov-name">${esc(s.signer ? cname(s.signer) : (s.name || 'Unknown signer'))}</span><br><span class="ov-sub">${esc(s.verdict.title)}${s.isDocTimestamp ? '' : s.fieldName ? ' · ' + esc(s.fieldName) : ''}</span></span>
+        <span class="ov-time">${t ? esc(fmt(t.d)) : ''}</span></button>`; }).join('')}</section>`;
+  }
+  html += sigs.map((s, i) => renderSig(s, i, sigs.length, res)).join('');
+  main.innerHTML = html;
+}
+
+const GATE = {
+  reject: { title: 'Rejected: this file shows signs of editing', icon: 'fail' },
+  review: { title: 'Hold for manual review', icon: 'warn' },
+  accept: { title: 'Accepted: no signs of editing found', icon: 'pass' }
+};
+const SEV_LABEL = { high: 'Serious', medium: 'Suspicious', low: 'Note', info: 'Note', good: 'Good sign' };
+function renderEvidence(ev) {
+  if (!ev) return '';
+  let h = '';
+  if (ev.before && ev.after) h += `<div class="ev"><span class="lbl">Original</span><span class="was">${esc(ev.before)}</span><span class="arrow" aria-hidden="true">→</span><span class="lbl">Now</span><span class="now">${esc(ev.after)}</span></div>`;
+  else if (ev.before) h += `<div class="ev"><span class="lbl">Hidden</span><span class="was">${esc(ev.before)}</span></div>`;
+  else if (ev.after) h += `<div class="ev"><span class="lbl">Shown</span><span class="now">${esc(ev.after)}</span></div>`;
+  if (ev.text) h += `<div class="ev-line" tabindex="0">${esc(ev.text)}</div>`;
+  if (ev.expected && ev.shown) h += `<div class="ev"><span class="lbl">Should be</span><span class="was" style="text-decoration:none">${esc(ev.expected)}</span><span class="lbl">Shows</span><span class="now">${esc(ev.shown)}</span></div>`;
+  return h;
+}
+function renderFinding(f) {
+  return `<li class="finding" data-sev="${f.severity}"><span class="sev">${SEV_LABEL[f.severity] || f.severity}</span>
+    <div><h3>${esc(f.title)}</h3><p>${esc(f.detail)}</p>${renderEvidence(f.evidence)}
+    <div class="f-meta">${f.page != null ? `<span class="pg">Page ${f.page + 1}</span>` : ''}<span class="code-tag">${esc(f.code)}</span></div></div></li>`;
+}
+function renderGate(v) {
+  if (!v) return '';
+  const g = GATE[v.decision];
+  const main = v.findings.filter((f) => f.severity === 'high' || f.severity === 'medium');
+  const minor = v.findings.filter((f) => f.severity === 'low' || f.severity === 'info');
+  const n = v.counts;
+  let sub;
+  if (v.decision === 'reject') sub = `${n.high} serious finding${n.high === 1 ? '' : 's'}${n.medium ? ` and ${n.medium} suspicious` : ''}. An upload would be stopped with the messages below.`;
+  else if (v.decision === 'review') sub = `Nothing proves an edit, but ${n.medium} finding${n.medium === 1 ? ' needs' : 's need'} a person to look before the file is accepted.`;
+  else sub = v.positives.length ? 'A trusted digital signature protects the file, and every check passed.' : `All checks passed. Heuristic checks can’t prove a statement is genuine; only the bank’s digital signature or a copy fetched from the bank can.`;
+  const ran = v.checks.filter((c) => c.state !== 'skip' && c.state !== 'none').length;
+  return `<section class="gate" data-decision="${v.decision}" aria-labelledby="gate-title">
+    <header class="gate-head"><span class="gate-icon">${ICON[g.icon]}</span>
+      <div><p class="eyebrow">Upload check</p><h2 id="gate-title">${esc(g.title)}</h2><p class="sub">${esc(sub)}</p></div>
+      <div class="risk" title="Risk score: 35 per serious finding, 12 per suspicious, 3 per note, capped at 100"><span class="risk-num">${v.score}</span><span class="risk-lbl">Risk / 100</span></div></header>
+    <div class="gate-body">
+      ${v.positives.length || main.length ? `<ol class="findings">${v.positives.map((p) => renderFinding({ ...p, severity: 'good' })).join('')}${main.map(renderFinding).join('')}</ol>` : ''}
+      ${minor.length ? `<details class="minor"${main.length ? '' : ' open'}><summary>${minor.length} minor note${minor.length === 1 ? '' : 's'}</summary><ol class="findings">${minor.map(renderFinding).join('')}</ol></details>` : ''}
+      <section><h3 class="section-title">${ran} of ${v.checks.length} checks ran</h3>
+        <div class="checkgrid">${v.checks.map((c) => `<div class="ck" data-state="${c.state}">${ico(c.state === 'skip' || c.state === 'none' ? 'info' : c.state)}<span><span class="ck-label">${esc(c.label)}</span>${c.note ? `<span class="ck-note">${esc(c.note)}</span>` : ''}</span></div>`).join('')}</div></section>
+      ${renderServerPanel(v)}
+    </div></section>`;
+}
+
+function renderServerPanel(v) {
+  if (!state.server) return '';
+  const r = state.serverResult && state.serverResult.sha === (state.result && state.result.sha256) ? state.serverResult : null;
+  const label = v.decision === 'reject' ? 'Try uploading anyway' : 'Upload statement';
+  const blurb = v.decision === 'reject'
+    ? 'The server runs the same checks again and will refuse this file. Try it to see the API’s response.'
+    : 'Sends the file to the server, which checks it again before storing it.';
+  let out = '';
+  if (r) {
+    if (r.status === 'busy') out = `<div class="server-result" data-status="review"><h4>Uploading and re-checking on the server…</h4></div>`;
+    else if (r.status === 'error') out = `<div class="server-result" data-status="error"><h4>The upload failed</h4><p>${esc(r.message)}</p></div>`;
+    else {
+      const b = r.body;
+      const st = r.http === 422 ? 'rejected' : b.needsReview ? 'review' : 'ok';
+      const head = r.http === 422 ? `Server refused the upload (HTTP 422)` : b.needsReview ? `Stored and held for review (HTTP 201)` : `Stored (HTTP 201)`;
+      out = `<div class="server-result" data-status="${st}"><h4>${esc(head)}</h4>
+        <p>${esc(b.message || '')}${b.id ? ` Reference <code>${esc(b.id)}</code>.` : ''}${b.duplicateOf ? ` The same file was already uploaded as <code>${esc(b.duplicateOf)}</code>.` : ''}</p>
+        ${r.http === 422 && b.errors && b.errors.length ? `<ul>${b.errors.slice(0, 8).map((e) => `<li><b>${esc(e.code)}</b>${e.page ? ' (page ' + e.page + ')' : ''}: ${esc(e.title)}</li>`).join('')}</ul>` : ''}
+      </div>`;
+    }
+  }
+  return `<section class="server" aria-live="polite"><div class="server-row"><p>${esc(blurb)}</p>
+    <button class="btn ${v.decision === 'reject' ? '' : 'btn-primary'}" data-action="server-upload" ${r && r.status === 'busy' ? 'disabled' : ''}>${SVG.download.replace('M8 2v8m0 0L4.8 6.8M8 10l3.2-3.2', 'M8 10V2m0 0L4.8 5.2M8 2l3.2 3.2')}${label}</button></div>${out}</section>`;
+}
+async function serverUpload() {
+  if (!state.file || !state.result) return;
+  const sha = state.result.sha256;
+  state.serverResult = { sha, status: 'busy' }; renderMain();
+  try {
+    const fd = new FormData();
+    fd.append('file', new Blob([state.file.bytes], { type: 'application/pdf' }), state.file.name);
+    if (state.file.password) fd.append('password', state.file.password);
+    const resp = await fetch('/api/statements', { method: 'POST', body: fd });
+    const body = await resp.json().catch(() => ({}));
+    if (resp.status !== 201 && resp.status !== 422) throw new Error(body.error || `HTTP ${resp.status}`);
+    state.serverResult = { sha, status: 'done', http: resp.status, body };
+    loadUploads();
+  } catch (e) {
+    state.serverResult = { sha, status: 'error', message: (e && e.message) || String(e) };
+  }
+  renderMain();
+}
+async function loadUploads() {
+  const box = $('#uploads-panel');
+  if (!box || !state.server) return;
+  try {
+    const r = await fetch('/api/statements');
+    const { statements } = await r.json();
+    box.hidden = false;
+    $('#uploads').innerHTML = statements.length ? statements.slice(0, 12).map((u) => `<li><div class="u-top"><span class="u-name">${esc(u.fileName)}</span><span class="pill ${u.decision}">${u.decision === 'review' ? 'Review' : 'Accepted'}</span></div>
+      <span class="u-sub"><code>${esc(u.id)}</code> · ${esc(fmt(new Date(u.receivedAt)))}${u.duplicateOf ? ' · duplicate' : ''}</span></li>`).join('')
+      : '<li class="hint" style="border:0;padding:0">Nothing stored yet. Rejected files are never stored.</li>';
+  } catch (e) { /* server list unavailable */ }
+}
+
+function encryptionBlock(res) {
+  const e = res.encryption;
+  if (!e) return '';
+  if (!e.supported) {
+    return `<div class="note warnish">${SVG.lock}<span>This PDF is encrypted. ${esc(e.reason || '')} Signatures are still fully checked; only the signer’s name, reason, location and field names stay hidden.</span></div>`;
+  }
+  if (e.unlocked) {
+    const how = e.emptyPassword
+      ? `This PDF is encrypted (${esc(e.label)}) but opens without a password, so the signature details were decrypted automatically.`
+      : `Unlocked with the ${e.unlocked === 'owner' ? 'owner' : 'open'} password (${esc(e.label)}). The password is used only on this page and isn’t saved.`;
+    return `<div class="note">${SVG.unlock}<span>${how}</span></div>`;
+  }
+  const wrong = e.wrongPassword;
+  return `<form class="unlock" id="unlock-form" autocomplete="off" novalidate>
+    <div class="unlock-head">${SVG.lock}<span><strong>This PDF is password-protected (${esc(e.label)}).</strong>
+      Its signatures are still fully checked below. Enter the password to also show the signer’s name, reason, location, field names and claimed signing time. Either the open password or the owner password works.</span></div>
+    <div class="unlock-row">
+      <div class="pw-wrap"><label for="pdf-password" class="visually-hidden">PDF password</label>
+        <input type="password" id="pdf-password" name="pdf-password" placeholder="PDF password" autocomplete="off" spellcheck="false" aria-invalid="${wrong ? 'true' : 'false'}" ${wrong ? 'aria-describedby="pw-err"' : ''}>
+        <button type="button" class="btn-link" data-action="toggle-pw" aria-pressed="false">Show</button></div>
+      <button class="btn btn-primary" type="submit">${SVG.unlock.replace('aria-hidden="true"', 'aria-hidden="true" style="width:15px;height:15px"')}Unlock</button>
+    </div>
+    ${wrong ? '<p class="unlock-err" id="pw-err" role="alert">That password didn’t unlock this PDF. Check capital letters, or try the other password if the file has two.</p>' : ''}
+  </form>`;
+}
+
+function renderSig(r, i, total, res) {
+  const signer = r.signer;
+  const t = signerTime(r);
+  const facts = [];
+  if (r.isDocTimestamp) {
+    if (signer) facts.push(['Timestamp authority', cname(signer)]);
+    if (r.timestamp && r.timestamp.genTime) facts.push(['Time', fmt(r.timestamp.genTime)]);
+  } else {
+    facts.push(['Signed by', signer ? cname(signer) : (r.name || 'Unknown')]);
+    if (signer && signer.subject.o) facts.push(['Organisation', signer.subject.o]);
+    const em = signerEmail(signer); if (em) facts.push(['Email', em]);
+    if (t) facts.push(['Signed', `${fmt(t.d)} (${t.how})`]);
+    if (r.reason) facts.push(['Reason', r.reason]);
+    if (r.location) facts.push(['Location', r.location]);
+    if (r.contactInfo) facts.push(['Contact', r.contactInfo]);
+  }
+  if (r.fieldName) facts.push(['Field', r.fieldName]);
+  const hidden = res.encryption && !res.encryption.unlocked;
+  facts.push(['Format', (SUBFILTERS[r.subFilter] || r.subFilter || 'Unknown') + (r.docMdp ? ` · certification, ${MDP[r.docMdp] || 'P=' + r.docMdp}` : '')]);
+  if (r.cms) facts.push(['Algorithm', `${r.cms.sigAlg}, ${r.cms.digest} digest`]);
+
+  const v = r.verdict;
+  return `<article class="sig" id="sig-${i}" data-state="${v.state}">
+    <header class="verdict"><span class="seal">${ICON[v.state]}</span>
+      <div class="verdict-text"><p class="eyebrow">${r.isDocTimestamp ? 'Document timestamp' : 'Signature'} ${i + 1} of ${total}</p>
+        <h2>${esc(v.title)}</h2><p class="sub">${esc(v.subtitle)}</p></div></header>
+    <div class="sig-body">
+      <dl class="facts">${facts.map(([k, val]) => `<div><dt>${esc(k)}</dt><dd>${esc(val)}</dd></div>`).join('')}
+        ${hidden ? `<div><dt>Reason, location, field</dt><dd>${res.encryption.supported ? '<button class="btn-link" data-action="focus-pw">Enter the password to show</button>' : 'Hidden by encryption'}</dd></div>` : ''}</dl>
+      <section><h3 class="section-title">Checks</h3>
+        <ul class="checks">${r.checks.map((c) => `<li class="check" data-state="${c.state}">${ico(c.state)}<span class="lbl">${esc(c.label)}</span><span class="det">${esc(c.detail)}</span></li>`).join('')}</ul></section>
+      ${byteBar(r, res.fileSize)}
+      ${r.chain ? `<section><h3 class="section-title">${r.isDocTimestamp ? 'Timestamp authority chain' : 'Certificate chain'} <span style="text-transform:none;letter-spacing:0;font-family:var(--font-body);font-weight:400">· checked as of ${esc(fmt(r.chain.at))}${r.chain.atMode === 'timestamp' ? ' (trusted timestamp)' : r.chain.atMode === 'custom' ? ' (your date)' : ''}</span></h3>${renderChain(r.chain, i)}</section>` : ''}
+      ${r.timestamp && !r.isDocTimestamp && r.timestamp.tsa ? renderTsa(r.timestamp) : ''}
+      <footer class="sig-foot">
+        <button class="btn" data-action="dl-sig" data-i="${i}">${SVG.download}Certificates for this signature (.zip)</button>
+      </footer>
+    </div></article>`;
+}
+
+function byteBar(r, total) {
+  const br = r.byteRange;
+  if (!br) return '';
+  const [, b1, b2, b3] = br;
+  const end = b2 + b3;
+  if (b2 < b1 || end > total) return '';
+  const after = Math.max(0, total - end);
+  const laterCls = r.laterSignatures ? 'later' : 'after';
+  const segs = [
+    ['signed', b1], ['gap', b2 - b1], ['signed', b3], [laterCls, after]
+  ].filter((s) => s[1] > 0);
+  const lbl = { signed: 'Signed', gap: 'Signature container (excluded)', after: 'Not covered', later: 'Later revisions' };
+  return `<section class="bytes"><h3 class="section-title" style="margin:0">Byte coverage</h3>
+    <div class="bar" role="img" aria-label="Signed ${nf.format(b1 + b3)} of ${nf.format(total)} bytes">${segs.map(([c, n]) => `<span class="seg ${c}" style="flex:${n} 1 0" title="${lbl[c]}: ${nf.format(n)} bytes"></span>`).join('')}</div>
+    <div class="legend"><span><i style="background:var(--pass)"></i>Signed ${nf.format(b1 + b3)} bytes</span>
+      <span><i style="background:var(--gap-fill)"></i>Signature ${nf.format(b2 - b1)} bytes</span>
+      ${after ? `<span><i style="background:var(--${r.laterSignatures ? 'info' : 'warn'})"></i>${r.laterSignatures ? 'Later revisions' : 'Not covered'} ${nf.format(after)} bytes</span>` : '<span>Covers to the end of the file</span>'}</div></section>`;
+}
+
+function certDetails(c) {
+  const rows = [
+    ['Subject', c.subject.str], ['Issuer', c.issuer.str], ['Serial number', c.serialHex.toUpperCase()],
+    ['Valid from', fmt(c.notBefore)], ['Valid until', fmt(c.notAfter)],
+    ['Public key', c.key.label], ['Signature algorithm', c.sigAlgLabel]
+  ];
+  if (c.ext.ca !== null) rows.push(['Basic constraints', c.ext.ca ? 'CA' + (c.ext.pathLen !== null ? `, path length ${c.ext.pathLen}` : '') : 'End entity']);
+  if (c.ext.keyUsage) rows.push(['Key usage', c.ext.keyUsage.join(', ')]);
+  if (c.ext.eku) rows.push(['Extended key usage', c.ext.eku.map((o) => S.EKU_NAMES[o] || o).join(', ')]);
+  if (c.ext.san.length) rows.push(['Alternative names', c.ext.san.join(', ')]);
+  if (c.ext.policies.length) rows.push(['Policies', c.ext.policies.join(', ')]);
+  if (c.ext.qc) rows.push(['Qualified', 'Contains QC statements (eIDAS)']);
+  if (c.ext.ocsp.length) rows.push(['OCSP', c.ext.ocsp.join(', ')]);
+  if (c.ext.crl.length) rows.push(['CRL', c.ext.crl.join(', ')]);
+  if (c.ext.caIssuers.length) rows.push(['CA issuers', c.ext.caIssuers.join(', ')]);
+  rows.push(['SHA-256', c.sha256, 'mono'], ['SHA-1', c.sha1, 'mono']);
+  return `<dl class="kv">${rows.map(([k, v, cls]) => `<dt>${esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${esc(v)}</dd>`).join('')}</dl>`;
+}
+
+function renderChain(chain, sigIdx) {
+  const n = chain.entries.length;
+  let html = '<ol class="chain">';
+  chain.entries.forEach((e, k) => {
+    const c = e.cert;
+    certIndex.set(c.sha256, c);
+    const st = e.issues.some((x) => x.level === 'fail') ? 'fail' : e.issues.length ? 'warn' : 'pass';
+    const last = k === n - 1;
+    const dotState = last && chain.status !== 'trusted' && st === 'pass' ? 'warn' : st;
+    const untrustedRoot = last && chain.status === 'untrusted-root';
+    html += `<li class="node"><span class="dot">${ico(dotState)}</span><div class="node-body">
+      <div class="node-top"><span class="tag ${e.anchor ? 'anchor' : ''}">${esc(e.role)}</span><span class="tag origin">${esc(originLabel(e))}</span></div>
+      <p class="node-name">${esc(cname(c))}</p>
+      <p class="node-sub">${c.subject.o && c.subject.o !== cname(c) ? esc(c.subject.o) + ' · ' : ''}valid ${esc(fmtD(c.notBefore))} – ${esc(fmtD(c.notAfter))} · ${esc(c.key.label)}</p>
+      ${e.issues.length ? `<ul class="issues">${e.issues.map((x) => `<li>${ico(x.level === 'fail' ? 'fail' : 'warn')}<span>${esc(x.text)}</span></li>`).join('')}</ul>` : ''}
+      ${untrustedRoot ? `<ul class="issues"><li>${ico('warn')}<span>Self-signed and not in your trust store.</span></li></ul>` : ''}
+      <details class="certdet"><summary>Certificate details</summary>${certDetails(c)}
+        <div class="node-actions">
+          <button class="btn btn-small" data-action="copy-pem" data-fp="${esc(c.sha256)}">${SVG.copy}Copy PEM</button>
+          <button class="btn btn-small" data-action="dl-cert" data-fp="${esc(c.sha256)}">${SVG.download}Download (.zip)</button>
+        </div></details>
+      ${untrustedRoot ? `<div class="node-actions"><button class="btn btn-small" data-action="trust-root" data-fp="${esc(c.sha256)}">${SVG.shield}Trust this root</button></div>` : ''}
+    </div></li>`;
+  });
+  if (chain.status === 'incomplete' && chain.missingIssuer) {
+    html += `<li class="node terminal"><span class="dot">${ico('none', 'info')}</span><div class="node-body">
+      <div class="node-top"><span class="tag">Missing issuer</span></div>
+      <p class="node-name">${esc(S.nameLabel(chain.missingIssuer))}</p>
+      <p class="node-sub">The PDF doesn’t include this certificate and it isn’t in your trust store.</p>
+      <div class="node-actions"><button class="btn btn-small" data-action="pick-cert">${SVG.plus}Add issuer certificate</button></div></div></li>`;
+  }
+  return html + '</ol>';
+}
+
+function renderTsa(ts) {
+  const c = ts.tsa;
+  certIndex.set(c.sha256, c);
+  const chainOk = ts.chain && ts.chain.status === 'trusted';
+  return `<section><h3 class="section-title">Timestamp authority</h3>
+    <dl class="facts" style="margin:0">
+      <div><dt>Authority</dt><dd>${esc(cname(c))}</dd></div>
+      <div><dt>Time</dt><dd>${esc(fmt(ts.genTime))}</dd></div>
+      <div><dt>Chain</dt><dd>${chainOk ? 'Trusted' : esc(ts.chain ? ts.chain.summary : 'Not built')}</dd></div>
+      <div><dt>Hash</dt><dd>${esc(ts.hash || '')}</dd></div>
+    </dl></section>`;
+}
+
+/* ---------------------------------------------------------------- reports and bundles */
+function sigFiles(r, i, prefix) {
+  const files = [];
+  const seen = new Set();
+  const enc = (c) => c.pem();
+  const lines = [`Signature ${i + 1}: ${r.verdict.title}`, r.verdict.subtitle, ''];
+  if (r.chain) {
+    const chainPem = [];
+    r.chain.entries.forEach((e, k) => {
+      const nm = `${prefix}chain/${String(k + 1).padStart(2, '0')}-${safe(e.role.toLowerCase())}-${safe(cname(e.cert))}`;
+      files.push({ name: nm + '.pem', data: enc(e.cert) }, { name: nm + '.cer', data: e.cert.der });
+      chainPem.push(enc(e.cert)); seen.add(e.cert.sha256);
+      lines.push(`${k + 1}. ${e.role}: ${e.cert.subject.str}`, `   Issuer: ${e.cert.issuer.str}`, `   SHA-256: ${e.cert.sha256}`, `   Source: ${originLabel(e)}`);
+    });
+    files.push({ name: `${prefix}chain-bundle.pem`, data: chainPem.join('') });
+  }
+  for (const c of r.certs || []) {
+    if (seen.has(c.sha256)) continue;
+    seen.add(c.sha256);
+    files.push({ name: `${prefix}other-embedded/${safe(cname(c))}-${c.sha256.replace(/:/g, '').slice(0, 8)}.pem`, data: enc(c) });
+  }
+  if (r.timestamp && r.timestamp.chain && !r.isDocTimestamp) {
+    r.timestamp.chain.entries.forEach((e, k) => {
+      if (seen.has(e.cert.sha256)) return;
+      seen.add(e.cert.sha256);
+      files.push({ name: `${prefix}timestamp-authority/${String(k + 1).padStart(2, '0')}-${safe(cname(e.cert))}.pem`, data: enc(e.cert) });
+    });
+  }
+  files.push({ name: `${prefix}README.txt`, data: lines.join('\n') + '\n\nchain/ holds each certificate as PEM and DER (.cer), signer first.\nchain-bundle.pem holds the whole chain in one file.\n' });
+  return files;
+}
+function allPem(sigs) {
+  const seen = new Set(); const out = [];
+  for (const r of sigs) {
+    const list = (r.chain ? r.chain.entries.map((e) => e.cert) : []).concat(r.certs || []);
+    for (const c of list) if (!seen.has(c.sha256)) { seen.add(c.sha256); out.push(`# ${c.subject.str}\n${c.pem()}`); }
+  }
+  return out.join('\n');
+}
+function reportMeta() {
+  const n = state.user.filter((u) => u.trusted).length;
+  return { now: state.checkedAt, trustStore: `${state.useMozilla ? ROOTS.source + ` (${state.mozilla.length} roots)` : 'Mozilla roots off'}${n ? ` + ${n} root${n === 1 ? '' : 's'} you added` : ''}${state.file.sample && state.file.sample.trustTestRoot ? ' + example test root' : ''}` };
+}
+function textReport() {
+  const res = state.result, f = state.file, m = reportMeta();
+  const L = [];
+  L.push('PDF INTEGRITY AND SIGNATURE REPORT', '='.repeat(34), '');
+  L.push(`File:        ${f.name}`, `Size:        ${nf.format(res.fileSize)} bytes`, `SHA-256:     ${res.sha256}`, `Revisions:   ${res.revisions}`);
+  L.push(`Checked:     ${state.checkedAt.toISOString()}`, `Trust store: ${m.trustStore}`);
+  if (res.encryption) {
+    const e = res.encryption;
+    L.push(`Encryption:  ${e.label || 'yes'}${e.unlocked ? (e.emptyPassword ? ', opened without a password' : `, unlocked with the ${e.unlocked} password`) : ', locked (signature text fields not shown)'}`);
+  }
+  if (state.atUsed) L.push(`Validated as of: ${state.atUsed.toISOString()} (chosen date)`);
+  const v = state.integrity;
+  if (v) {
+    L.push('', '-'.repeat(72), `UPLOAD CHECK: ${GATE[v.decision].title.toUpperCase()}`, `Risk score: ${v.score}/100`, '');
+    v.positives.forEach((p) => L.push(`  [GOOD]    ${p.title}`, `            ${p.detail}`));
+    v.findings.forEach((x) => {
+      L.push(`  [${(SEV_LABEL[x.severity] || x.severity).toUpperCase().padEnd(10)}] ${x.code}${x.page != null ? ` (page ${x.page + 1})` : ''}: ${x.title}`, `              ${x.detail}`);
+      const ev = x.evidence;
+      if (ev && ev.before && ev.after) L.push(`              Original: ${ev.before}   Now: ${ev.after}`);
+      else if (ev && ev.before) L.push(`              Hidden: ${ev.before}`);
+      else if (ev && ev.after) L.push(`              Shown: ${ev.after}`);
+      if (ev && ev.text) L.push(`              Row: ${ev.text}`);
+    });
+    L.push('', 'Checks:');
+    v.checks.forEach((c) => L.push(`  [${c.state.toUpperCase().padEnd(4)}] ${c.label}${c.note ? ': ' + c.note : ''}`));
+  }
+  L.push('', '-'.repeat(72), tallyText(res.signatures), '');
+  res.signatures.forEach((r, i) => {
+    L.push('-'.repeat(72), `${r.isDocTimestamp ? 'DOCUMENT TIMESTAMP' : 'SIGNATURE'} ${i + 1}: ${r.verdict.title.toUpperCase()}`, r.verdict.subtitle, '');
+    if (r.signer) L.push(`Signer:      ${r.signer.subject.str}`);
+    const t = signerTime(r); if (t) L.push(`Signed:      ${t.d.toISOString()} (${t.how})`);
+    if (r.fieldName) L.push(`Field:       ${r.fieldName}`);
+    if (r.reason) L.push(`Reason:      ${r.reason}`);
+    if (r.location) L.push(`Location:    ${r.location}`);
+    L.push(`Format:      ${SUBFILTERS[r.subFilter] || r.subFilter || 'unknown'}`, `ByteRange:   [${r.byteRange.join(' ')}]`, '');
+    L.push('Checks:');
+    r.checks.forEach((c) => L.push(`  [${c.state.toUpperCase().padEnd(4)}] ${c.label}: ${c.detail}`));
+    if (r.chain) {
+      L.push('', `Certificate chain (as of ${r.chain.at.toISOString()}, ${r.chain.status}):`);
+      r.chain.entries.forEach((e, k) => {
+        L.push(`  ${k + 1}. ${e.role}: ${e.cert.subject.str}`);
+        L.push(`     Issuer:  ${e.cert.issuer.str}`);
+        L.push(`     Valid:   ${e.cert.notBefore.toISOString()} to ${e.cert.notAfter.toISOString()}`);
+        L.push(`     Serial:  ${e.cert.serialHex.toUpperCase()}`);
+        L.push(`     SHA-256: ${e.cert.sha256}`);
+        L.push(`     Source:  ${originLabel(e)}`);
+        e.issues.forEach((x) => L.push(`     ${x.level.toUpperCase()}: ${x.text}`));
+      });
+      if (r.chain.missingIssuer) L.push(`  Missing issuer: ${r.chain.missingIssuer.str}`);
+    }
+    L.push('');
+  });
+  L.push('-'.repeat(72), 'Not checked: pixel edits inside scanned images, whether the bank issued the statement, and certificate revocation (OCSP/CRL).', '');
+  return L.join('\n');
+}
+function jsonReport() {
+  const j = S.reportJSON(state.file.name, state.result, reportMeta());
+  if (state.atUsed) j.validatedAsOf = state.atUsed.toISOString();
+  const v = state.integrity;
+  if (v) {
+    // the shape an upload API would return
+    j.upload = {
+      accepted: v.decision === 'accept', decision: v.decision, riskScore: v.score,
+      errors: v.findings.filter((x) => x.severity === 'high').map((x) => ({ code: x.code, message: x.title + '. ' + x.detail, page: x.page != null ? x.page + 1 : null, evidence: x.evidence || null })),
+      warnings: v.findings.filter((x) => x.severity !== 'high').map((x) => ({ code: x.code, severity: x.severity, message: x.title + '. ' + x.detail, page: x.page != null ? x.page + 1 : null, evidence: x.evidence || null })),
+      positives: v.positives.map((x) => ({ code: x.code, message: x.title + '. ' + x.detail })),
+      checks: v.checks
+    };
+  }
+  j.notChecked = ['pixel edits inside scanned images', 'whether the bank issued the statement', 'certificate revocation (OCSP/CRL)'];
+  return JSON.stringify(j, null, 2);
+}
+
+/* ---------------------------------------------------------------- events */
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el || el.tagName === 'INPUT') return;
+  const a = el.dataset.action;
+  const res = state.result;
+  const fbase = state.file ? safe(base(state.file.name)) : 'document';
+  if (a === 'pick-pdf') $('#pdf-input').click();
+  else if (a === 'pick-cert') $('#cert-input').click();
+  else if (a === 'sample') openSample(el.dataset.id);
+  else if (a === 'goto') { const t = $('#sig-' + el.dataset.i); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); }
+  else if (a === 'server-upload') serverUpload();
+  else if (a === 'focus-pw') { const p = $('#pdf-password'); if (p) { p.scrollIntoView({ block: 'center' }); p.focus(); } }
+  else if (a === 'toggle-pw') {
+    const p = $('#pdf-password'); if (!p) return;
+    const show = p.type === 'password';
+    p.type = show ? 'text' : 'password';
+    el.textContent = show ? 'Hide' : 'Show'; el.setAttribute('aria-pressed', String(show));
+    p.focus();
+  }
+  else if (a === 'copy-hash') copyText(res.sha256);
+  else if (a === 'copy-pem') { const c = certIndex.get(el.dataset.fp); if (c) copyText(c.pem()); }
+  else if (a === 'dl-cert') {
+    const c = certIndex.get(el.dataset.fp); if (!c) return;
+    const nm = safe(cname(c));
+    saveFile(`${nm}.zip`, zip([{ name: `${nm}.pem`, data: c.pem() }, { name: `${nm}.cer`, data: c.der }]), c.pem());
+  } else if (a === 'dl-sig') {
+    const i = +el.dataset.i, r = res.signatures[i];
+    saveFile(`${fbase}-signature-${i + 1}-certificates.zip`, zip(sigFiles(r, i, '')), allPem([r]));
+  } else if (a === 'dl-all') {
+    const files = res.signatures.flatMap((r, i) => sigFiles(r, i, `signature-${i + 1}/`));
+    files.push({ name: 'report.txt', data: textReport() });
+    saveFile(`${fbase}-certificates.zip`, zip(files), allPem(res.signatures));
+  } else if (a === 'dl-report-txt') { const t = textReport(); saveFile(`${fbase}-signature-report.txt`, t, t); }
+  else if (a === 'dl-report-json') { const t = jsonReport(); saveFile(`${fbase}-signature-report.json`, t, t); }
+  else if (a === 'trust-root') {
+    const c = certIndex.get(el.dataset.fp); if (!c) return;
+    addUserCert(c, true); persistUser(); renderUserCerts(); toast(`Trusting ${cname(c)}`); run();
+  } else if (a === 'remove-cert') {
+    state.user.splice(+el.dataset.i, 1); persistUser(); renderUserCerts(); run();
+  }
+});
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.id === 'pdf-input') { openFile(t.files[0]); t.value = ''; }
+  else if (t.id === 'cert-input') { if (t.files.length) addCertFiles(Array.from(t.files)); t.value = ''; }
+  else if (t.id === 'use-mozilla') { state.useMozilla = t.checked; run(); }
+  else if (t.dataset.action === 'toggle-trust') { const u = state.user[+t.dataset.i]; if (u) { u.trusted = t.checked; persistUser(); run(); } }
+  else if (t.name === 'at') {
+    state.atMode = t.value;
+    const inp = $('#at-value'); inp.disabled = t.value !== 'custom';
+    if (t.value === 'custom' && !inp.value) {
+      const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      inp.value = d.toISOString().slice(0, 16); state.atValue = inp.value;
+    }
+    if (t.value === 'custom') inp.focus();
+    run();
+  } else if (t.id === 'at-value') { state.atValue = t.value; if (state.atMode === 'custom') run(); }
+});
+document.addEventListener('submit', (e) => {
+  if (e.target.id !== 'unlock-form') return;
+  e.preventDefault();
+  const p = $('#pdf-password');
+  const pw = p ? p.value : '';
+  if (!pw) { toast('Enter the PDF’s password first.'); if (p) p.focus(); return; }
+  if (!state.file) return;
+  state.file.password = pw;
+  state.focusPassword = true;
+  run();
+});
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
+window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
+window.addEventListener('dragover', (e) => { e.preventDefault(); });
+window.addEventListener('drop', (e) => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  if (!files.length) return;
+  const pdf = files.find((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+  const certs = files.filter((f) => /\.(pem|crt|cer|der|p7b|p7c)$/i.test(f.name));
+  if (certs.length && !pdf) addCertFiles(certs);
+  else openFile(pdf || files[0]);
+});
+
+/* ---------------------------------------------------------------- start */
+async function init() {
+  renderScope();
+  const group = (g, label) => `<div class="ex-group"><span class="eyebrow">${label}</span>${SAMPLES.items.filter((s) => (s.group || 'signature') === g).map((s) => `<button class="chip" data-action="sample" data-id="${esc(s.id)}" aria-pressed="false">${esc(s.label)}</button>`).join('')}</div>`;
+  $('#examples').innerHTML = group('statement', 'Statements') + group('signature', 'Signatures');
+  for (const b of ROOTS.certs) { try { state.mozilla.push(await S.loadCert(S.b64decode(b))); } catch (e) { /* skip */ } }
+  $('#mozilla-meta').textContent = `${state.mozilla.length} roots · ${ROOTS.source.replace(/^Mozilla CA bundle /, '')}`;
+  try { state.testRoot = (await S.parseCertBundle(new TextEncoder().encode(SAMPLES.testRootPem)))[0]; } catch (e) { /* ignore */ }
+  await restoreUser();
+  renderUserCerts();
+  getDownloads();
+  try {
+    const h = await fetch('/api/health', { cache: 'no-store' });
+    if (h.ok) { const j = await h.json(); state.server = !!j.ok; }
+  } catch (e) { state.server = false; }
+  loadUploads();
+  if (!state.file) openSample('whitebox');
+}
+init();
+})();
+</script>
