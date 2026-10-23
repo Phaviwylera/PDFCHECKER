@@ -38,11 +38,16 @@ app.use((req, res, next) => {
 });
 
 // ---- static: the page, the shared engine and pdf.js
-app.use(express.static(path.join(here, 'public'), { extensions: ['html'], maxAge: '1h' }));
+// the page is never cached (it names the current scripts); fingerprinted scripts are cached for good
+app.use(express.static(path.join(here, 'public'), {
+  extensions: ['html'],
+  setHeaders: (res, file) => res.set('Cache-Control', file.endsWith('.html') ? 'no-cache, no-store, must-revalidate' : 'public, max-age=3600')
+}));
 const ENGINE_FILES = new Set(['pdfsig-core.js', 'pdfsig-content.js', 'mozilla-roots.js']);
 app.get('/js/:file', (req, res, next) => {
   if (!ENGINE_FILES.has(req.params.file)) return next();
-  res.type('application/javascript').set('Cache-Control', 'public, max-age=3600').sendFile(path.join(here, 'engine', req.params.file));
+  // ?v=<content hash> URLs never change content; unversioned requests must revalidate
+  res.type('application/javascript').set('Cache-Control', req.query.v ? 'public, max-age=31536000, immutable' : 'no-cache').sendFile(path.join(here, 'engine', req.params.file));
 });
 const PDFJS_DIR = path.join(here, 'node_modules', 'pdfjs-dist', 'build');
 for (const f of ['pdf.min.js', 'pdf.worker.min.js']) {

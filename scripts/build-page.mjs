@@ -1,4 +1,5 @@
 // Builds public/index.html from src/app.html, pointing scripts at files the server hosts.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,10 +12,13 @@ const swap = (from, to) => {
 };
 swap('<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>', '<script src="/vendor/pdfjs/pdf.min.js"></script>');
 swap('<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>', '<script src="/vendor/pdfjs/pdf.worker.min.js"></script>');
-swap('<script>/*ROOTS*/</script>', '<script src="/js/mozilla-roots.js"></script>');
-swap('<script>/*SAMPLES*/</script>', '<script src="/js/samples.js"></script>');
-swap('<script>/*CORE*/</script>', '<script src="/js/pdfsig-core.js"></script>');
-swap('<script>/*CONTENT*/</script>', '<script src="/js/pdfsig-content.js"></script>');
+// every script URL carries a fingerprint of its contents, so a deploy can never be served from an old cache
+const v = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 12);
+const eng = (f) => `/js/${f}?v=${v(path.join(root, 'engine', f))}`;
+swap('<script>/*ROOTS*/</script>', `<script src="${eng('mozilla-roots.js')}"></script>`);
+swap('<script>/*SAMPLES*/</script>', `<script src="/js/samples.js?v=${v(path.join(root, 'public', 'js', 'samples.js'))}"></script>`);
+swap('<script>/*CORE*/</script>', `<script src="${eng('pdfsig-core.js')}"></script>`);
+swap('<script>/*CONTENT*/</script>', `<script src="${eng('pdfsig-content.js')}"></script>`);
 const doc = `<!doctype html>
 <html lang="en">
 <head>

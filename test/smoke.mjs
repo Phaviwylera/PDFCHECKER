@@ -52,6 +52,16 @@ try {
   console.log(`${list.statements.length === 2 ? 'PASS' : 'FAIL'}  ${list.statements.length} statements stored (rejected files are not stored)`); if (list.statements.length !== 2) failed++;
   const page = await fetch(base + '/');
   console.log(`${page.ok ? 'PASS' : 'FAIL'}  page served (HTTP ${page.status})`); if (!page.ok) failed++;
+  // the page must never be cached, and must load the engine that is on disk now
+  const html = await page.text();
+  const noCache = /no-cache|no-store/.test(page.headers.get('cache-control') || '');
+  console.log(`${noCache ? 'PASS' : 'FAIL'}  page is not cached (${page.headers.get('cache-control')})`); if (!noCache) failed++;
+  for (const f of ['pdfsig-core.js', 'pdfsig-content.js']) {
+    const m = new RegExp(`/js/${f.replace('.', '\\.')}\\?v=([0-9a-f]{12})`).exec(html);
+    const res = m ? await fetch(base + m[0]) : null;
+    const same = res && res.ok && (await res.text()) === fs.readFileSync(path.join(root, 'engine', f), 'utf8');
+    console.log(`${same ? 'PASS' : 'FAIL'}  page loads current ${f}${m ? ` (v=${m[1]})` : ' (no version in URL)'}`); if (!same) failed++;
+  }
 } finally {
   srv.kill();
   fs.rmSync(path.join(root, 'data', 'test-uploads'), { recursive: true, force: true });
