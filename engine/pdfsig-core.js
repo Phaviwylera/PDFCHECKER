@@ -2391,6 +2391,24 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
       evidence: { fonts: hits[0].names, pages } });
   }
 
+  // ---- the program that last wrote the bytes, from the binary marker after the header
+  {
+    const head = bytes.subarray(0, 64);
+    let i = 0; while (i < head.length && head[i] !== 10 && head[i] !== 13) i++;
+    while (i < head.length && (head[i] === 10 || head[i] === 13)) i++;
+    const marker = head[i] === 37 ? Array.from(head.subarray(i + 1, i + 5)) : null;
+    const hex = marker ? marker.map((x) => x.toString(16).padStart(2, '0')).join('') : '';
+    const WRITERS = { f6e4fcdf: 'Apache PDFBox', '81818181': 'pdf-lib', bff7a2fe: 'qpdf', e2e3cfd3: 'iText', c7ec8fa2: 'Ghostscript', b5b5b5b5: 'Skia (Chrome) or Microsoft Office' };
+    const CLAIMS = [[/openhtmltopdf|pdfbox/i, 'f6e4fcdf', 'Apache PDFBox'], [/itext/i, 'e2e3cfd3', 'iText'], [/ghostscript/i, 'c7ec8fa2', 'Ghostscript'], [/skia/i, 'b5b5b5b5', 'Skia']];
+    const prod = meta.Producer || '';
+    const claim = CLAIMS.find(([re]) => re.test(prod));
+    info.writerMarker = hex || null;
+    if (claim && hex && hex !== claim[1] && hex.length === 8) {
+      add({ code: 'WRITER_MISMATCH', severity: 'medium', category: 'structure', title: `Written by ${WRITERS[hex] || 'other software'}, not by the claimed generator`,
+        detail: `The producer field says “${prod}”, which writes through ${claim[2]}. The bytes after the PDF header are the signature ${WRITERS[hex] ? 'of ' + WRITERS[hex] : '%' + hex.toUpperCase()}, so a different program saved the file last. Some banks re-save statements to encrypt them; on its own this is a prompt to look closer, not proof of an edit.`,
+        evidence: { producer: prod, expected: claim[1], found: hex } });
+    }
+  }
   // ---- copy of another PDF: converters that decrypt and re-save record the source
   const hdrVer = parseFloat((/%PDF-(\d\.\d)/.exec(text.slice(0, 1024)) || [])[1]) || null;
   const catVer = root && root.Version ? parseFloat(String(root.Version).replace(/^\//, '')) || null : null;
@@ -2450,7 +2468,7 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
   // ---- page-level traces of a content editor
   const EDITOR_FONT_KEYS = [[/^PSEditFont\d+$/, 'a PDF content editor']];
   const editorKeyPages = [], aliasPages = [], blankPages = [];
-  const inPlace = [], overridden = [];
+  const inPlace = [], overridden = [], rounded = [];
   let btTotal = 0, btSqueezed = 0;
   let editorKeys = 0, aliasCount = 0, blanks = 0, blankChars = 0;
   for (let pi = 0; pi < pagesNow.length; pi++) {
@@ -2497,6 +2515,20 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
         if ((head.match(/\bTm\b/g) || []).length >= 2) overridden.push({ page: pi });
       }
       btTotal += total; btSqueezed += sq;
+      // positions written with fewer decimals than the generator uses, sitting on one of its rows
+      const ys = [...t.matchAll(/(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+Tm/g)].map((x) => x[6]);
+      const decs = (v) => (v.includes('.') ? v.split('.')[1].length : 0);
+      const hist = new Map(); for (const y of ys) hist.set(decs(y), (hist.get(decs(y)) || 0) + 1);
+      const dom = [...hist.entries()].sort((x, y) => y[1] - x[1])[0];
+      if (dom && dom[0] >= 4 && dom[1] >= 20) {
+        const full = ys.filter((y) => decs(y) === dom[0]).map(Number);
+        for (const y of ys) {
+          if (decs(y) > dom[0] - 2) continue;
+          const v = Number(y);
+          const row = full.find((f) => Math.abs(f - v) < 0.0015 && f !== v);
+          if (row != null) rounded.push({ page: pi, y, row });
+        }
+      }
     }
     if (n) { blanks += n; blankChars += chars; blankPages.push({ page: pi, count: n }); }
   }
@@ -2508,6 +2540,13 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
       title: `Text edited in place on page${inPages.length > 1 ? 's' : ''} ${inPages.map((x) => x + 1).join(', ')}`,
       detail: `${inPlace.length} text object${inPlace.length === 1 ? '' : 's'} carry rendering settings and a horizontal squeeze that the rest of the document never uses${overridden.length ? `, and ${overridden.length} still hold their original position, overridden by a new one before anything was drawn` : ''}. This is what a PDF editor leaves when it retypes a value inside the existing page instead of adding new text, and it is invisible when the page is viewed.`,
       evidence: { pages: inPages.map((x) => x + 1), squeezedWithSettings: inPlace.length, overriddenPositions: overridden.length, textObjects: btTotal } });
+  }
+  if (rounded.length) {
+    const rp = [...new Set(rounded.map((x) => x.page))].sort((a, b) => a - b);
+    add({ code: 'ROUNDED_POSITIONS', severity: 'high', category: 'content', page: rp[0],
+      title: `${rounded.length} piece${rounded.length === 1 ? '' : 's'} of text placed with rounded coordinates on page${rp.length > 1 ? 's' : ''} ${rp.map((x) => x + 1).join(', ')}`,
+      detail: `The generator writes every position with full precision (for example ${rounded[0].row}). These pieces sit on the same rows but at ${rounded.slice(0, 3).map((x) => x.y).join(', ')}: the same line rounded to fewer decimals, which happens when another program writes text into the page.`,
+      evidence: { pages: rp.map((x) => x + 1), positions: rounded.slice(0, 20) } });
   }
   if (editorKeys || blanks || ((inPlace.length || overridden.length) && genuineSqueezeRare)) {
     try { info.editMap = await buildEditMap(scan, pagesNow, (k) => !!k && EDITOR_FONT_KEYS.some(([re]) => re.test(k))); }
@@ -2589,7 +2628,7 @@ const SEV_RANK = { high: 0, medium: 1, low: 2, info: 3 };
 const CHECK_DEFS = [
   ['signature', 'Digital signature', ['SIGNATURE_BROKEN', 'CHANGED_AFTER_SIGNING', 'UNTRUSTED_SIGNER']],
   ['history', 'Edit history inside the file', ['CONTENT_CHANGED_IN_UPDATE', 'TEXT_REPLACED', 'TEXT_ADDED', 'TEXT_REMOVED', 'ANNOTATION_ADDED_IN_UPDATE', 'RESAVED', 'ID_CHANGED', 'LINEARIZED_LENGTH', 'TRAILING_DATA', 'NO_EOF']],
-  ['software', 'Software that made the file', ['EDITING_SOFTWARE', 'PDF_LIBRARY', 'OFFICE_SOFTWARE', 'REPRINTED', 'SCANNER_APP', 'PRODUCER_CHANGED', 'METADATA_MISMATCH', 'XMP_EDIT_HISTORY']],
+  ['software', 'Software that made the file', ['WRITER_MISMATCH', 'EDITING_SOFTWARE', 'PDF_LIBRARY', 'OFFICE_SOFTWARE', 'REPRINTED', 'SCANNER_APP', 'PRODUCER_CHANGED', 'METADATA_MISMATCH', 'XMP_EDIT_HISTORY']],
   ['dates', 'Creation and modification dates', ['FUTURE_DATE', 'IMPOSSIBLE_DATES', 'MODIFIED_AFTER_CREATION', 'NO_METADATA']],
   ['cover', 'Hidden, covered or overprinted text', ['COVER_UP', 'IMAGE_OVER_TEXT', 'OVERLAPPING_TEXT']],
   ['fonts', 'Fonts of amounts and dates', ['FONT_MISMATCH', 'DUPLICATE_FONT_SUBSET']],
@@ -2598,7 +2637,7 @@ const CHECK_DEFS = [
   ['narration', 'Narration codes match debits and credits', ['NARRATION_CODE_MISMATCH']],
   ['overlay', 'Annotations and form fields', ['TEXT_ANNOTATION', 'MARKUP_ANNOTATION', 'FORM_FIELD_VALUE']],
   ['scan', 'Real text, not a scanned image', ['SCANNED', 'NO_TEXT']],
-  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'IN_PLACE_EDITS', 'FONT_ALIASES', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED']],
+  ['edits', 'Text rewritten by an editor', ['EDITOR_FONT_NAMES', 'DELETED_TEXT', 'IN_PLACE_EDITS', 'ROUNDED_POSITIONS', 'FONT_ALIASES', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED']],
   ['encryption', 'Encryption and re-saving', ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'ENCRYPTION_VERSION_MISMATCH', 'ENCRYPTION_NO_OWNER_LOCK', 'VERSION_RAISED']],
   ['active', 'Scripts and attachments', ['JAVASCRIPT', 'LAUNCH_ACTION', 'EMBEDDED_FILES', 'XFA_FORM']]
 ];

@@ -271,15 +271,33 @@ async function analyze(lib, bytes, opts = {}) {
       const last = clusters[clusters.length - 1];
       if (last && (r.x + r.w) - (last[last.length - 1].x + last[last.length - 1].w) <= 8) last.push(r); else clusters.push([r]);
     }
+    const columns = [];
     for (const cl of clusters) {
       if (cl.length < 5) continue;
       const rights = cl.map((r) => r.x + r.w).sort((a, b) => a - b);
       const med = rights[Math.floor(rights.length / 2)];
       const tight = cl.filter((r) => Math.abs(r.x + r.w - med) <= 0.3).length;
       if (tight / cl.length < 0.75) continue;
+      columns.push({ right: med, n: cl.length, members: new Set(cl) });
       for (const r of cl) {
         const dev = r.x + r.w - med;
         if (Math.abs(dev) > 0.5 && Math.abs(dev) <= 8) misaligned.set(r, [`ends ${Math.abs(dev).toFixed(1)} pt ${dev > 0 ? 'right' : 'left'} of the other ${cl.length - 1} amounts in its column`]);
+      }
+    }
+    // amounts that sit off every column, in a row whose other amounts line up: shifted by more than a slip
+    if (columns.length) {
+      const onColumn = (r) => columns.some((c) => Math.abs(r.x + r.w - c.right) <= 0.5);
+      for (const r of list) {
+        if (onColumn(r) || misaligned.has(r)) continue;
+        const rowMates = list.filter((o) => o !== r && Math.abs(o.y - r.y) <= 2.5);
+        const rowAligned = rowMates.some(onColumn);
+        const near = columns.map((c) => ({ c, dev: r.x + r.w - c.right })).sort((x, y) => Math.abs(x.dev) - Math.abs(y.dev))[0];
+        if (!near || Math.abs(near.dev) > 80) continue;
+        if (!rowAligned && rowMates.length) {
+          // the whole row moved: still off-column if every mate is off too
+          if (!rowMates.every((o) => !onColumn(o))) continue;
+        }
+        misaligned.set(r, [`ends ${Math.abs(near.dev).toFixed(1)} pt ${near.dev > 0 ? 'right' : 'left'} of its column, where ${near.c.n} other amounts on this page line up exactly`]);
       }
     }
     const pageAll = items.filter((r) => r.page === pi);
@@ -295,8 +313,9 @@ async function analyze(lib, bytes, opts = {}) {
   let mi = 0;
   for (const [r, why] of misaligned) {
     if (mi++ >= 6) break;
-    add({ code: 'MISALIGNED', severity: 'medium', page: r.page, title: `Amount out of line on page ${r.page + 1}`,
-      detail: `${q(r.str.trim())} ${why.join(' and ')}. Generated statements line numbers up exactly; hand-placed text is usually off by a fraction of a point.`, evidence: { after: r.str.trim() } });
+    const big = why.some((w) => { const m = /ends ([\d.]+) pt/.exec(w); return m && +m[1] > 3; });
+    add({ code: 'MISALIGNED', severity: big ? 'high' : 'medium', page: r.page, title: `Amount out of line on page ${r.page + 1}`,
+      detail: `${q(r.str.trim())} ${why.join(' and ')}. ${big ? 'A value retyped into the page, rather than generated with it, can land visibly off its column.' : 'Generated statements line numbers up exactly; hand-placed text is usually off by a fraction of a point.'}`, evidence: { after: r.str.trim() } });
   }
 
   // ---- running balance arithmetic
