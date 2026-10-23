@@ -2538,10 +2538,12 @@ async function analyzeStructure(bytes, text, enc, sigs, now) {
     const late = L.filter((l) => l.editorAfterBank > 0);
     const sq = L.reduce((a, l) => a + l.squeezed, 0);
     const bits = [];
-    if (late.length) bits.push(`${late.reduce((a, l) => a + l.editorAfterBank, 0)} pieces are drawn after all of the bank’s text on their page, as a separate layer`);
-    if (outside.length) bits.push(`${outside.reduce((a, l) => a + l.editorUnclipped, 0)} sit outside the clipping area that holds ${Math.round(Math.min(...outside.map((l) => l.bankClippedShare)) * 100)}% or more of the bank’s text`);
-    if (over.length) bits.push(`${over.reduce((a, l) => a + l.editorOverImages, 0)} are painted on top of the page’s watermark or images, while the bank’s text lies beneath them`);
-    if (sq) bits.push(`${sq} are squeezed horizontally (for example to ${(L.length && em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6) ? (em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6).after.hscale * 100).toFixed(4) : '')}%) to fit the space`);
+    const n_ = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+    const cLate = late.reduce((a, l) => a + l.editorAfterBank, 0), cOut = outside.reduce((a, l) => a + l.editorUnclipped, 0), cOver = over.reduce((a, l) => a + l.editorOverImages, 0);
+    if (late.length) bits.push(`${n_(cLate, 'piece is', 'pieces are')} drawn after all of the bank’s text on its page, as a separate layer`);
+    if (outside.length) bits.push(`${n_(cOut, 'sits', 'sit')} outside the clipping area that holds ${Math.round(Math.min(...outside.map((l) => l.bankClippedShare)) * 100)}% or more of the bank’s text`);
+    if (over.length) bits.push(`${n_(cOver, 'is', 'are')} painted on top of the page’s watermark or images, while the bank’s text lies beneath them`);
+    if (sq) bits.push(`${sq} ${sq === 1 ? 'is' : 'are'} squeezed horizontally (for example to ${(L.length && em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6) ? (em.edits.find((e) => e.after && Math.abs(e.after.hscale - 1) > 1e-6).after.hscale * 100).toFixed(4) : '')}%) to fit the space`);
     if (bits.length) add({ code: 'TEXT_ON_SEPARATE_LAYER', severity: 'high', category: 'content', page: L[0].page - 1,
       title: `Retyped text drawn on top of the page on page${L.length > 1 ? 's' : ''} ${L.map((l) => l.page).join(', ')}`,
       detail: `The bank draws all of its text in one pass inside its table. Of the editor’s text: ${bits.join('; ')}.`,
