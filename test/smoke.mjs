@@ -22,7 +22,9 @@ const expect = {
   'reencrypted-editor.pdf': { status: 422, password: 'TEST1234', codes: ['REWRITTEN_FROM_SOURCE', 'ENCRYPTION_REPLACED', 'EDITOR_FONT_NAMES', 'DELETED_TEXT', 'TEXT_ON_SEPARATE_LAYER', 'AMOUNTS_INFLATED'],
     editMap: { now: '1,85,000.00', digits: 5 } },
   // value retyped inside the bank's own text object, no editor fonts or spacers (see test/make-inplace-fixture.py)
-  'inplace-edit.pdf': { status: 422, codes: ['IN_PLACE_EDITS', 'AMOUNTS_INFLATED'], editMap: { now: '1,85,000.00', digits: 5 } }
+  'inplace-edit.pdf': { status: 422, codes: ['IN_PLACE_EDITS', 'AMOUNTS_INFLATED'], editMap: { now: '1,85,000.00', digits: 5 } },
+  // one amount 4.4 pt off its column, one balance 0.6 pt off its row (see test/make-shifted-fixture.py)
+  'shifted-amount.pdf': { status: 422, codes: ['MISALIGNED'], position: { text: '362.10', drawnRight: 399.6, anchor: 404.0 } }
 };
 let failed = 0;
 try {
@@ -40,6 +42,13 @@ try {
       const e = body.editMap && body.editMap.edits.find((x) => x.after && x.after.text === want.editMap.now);
       const good = e && e.before && e.before.digits === want.editMap.digits && body.editMap.fonts.length >= 1;
       console.log(`${good ? 'PASS' : 'FAIL'}  edit map: "${want.editMap.now}" replaced a ${e && e.before ? e.before.digits : '?'}-digit value (${e && e.shift ? e.shift.width.toFixed(2) : '?'} pt wider)`);
+      if (!good) failed++;
+    }
+    if (want.position) {
+      const f = [...(body.errors || []), ...(body.warnings || [])].find((e) => e.code === 'MISALIGNED' && e.evidence && e.evidence.after === want.position.text);
+      const P = f && f.evidence.position;
+      const good = P && Math.abs(P.actual.right - want.position.drawnRight) < 0.02 && Math.abs(P.expected.right - want.position.anchor) < 0.02;
+      console.log(`${good ? 'PASS' : 'FAIL'}  position: "${want.position.text}" drawn to x ${P ? P.actual.right : '?'}, column anchor x ${P ? P.expected.right : '?'}`);
       if (!good) failed++;
     }
     const ok = r.status === want.status && (!want.decision || body.decision === want.decision) && (!want.codes || want.codes.every((c) => codes.includes(c)));

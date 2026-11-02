@@ -130,11 +130,13 @@ async function analyze(lib, bytes, opts = {}) {
   info.pages = doc.numPages;
   const items = []; // visible text items across pages
   const amountItemsByPage = [];
+  const pageTop = [];
   const hdr = { dr: [], cr: [] };
   for (let p = 1; p <= maxPages; p++) {
     const page = await doc.getPage(p);
     const pi = p - 1;
     const view = page.view;
+    pageTop[pi] = view[3];
     const pageArea = Math.abs((view[2] - view[0]) * (view[3] - view[1]));
     let ops, tc;
     try { ops = await page.getOperatorList(); tc = await page.getTextContent(); } catch (e) { continue; }
@@ -263,6 +265,30 @@ async function analyze(lib, bytes, opts = {}) {
 
   // ---- alignment of amounts in their columns and rows
   const misaligned = new Map();
+  const r2 = (v) => Math.round(v * 100) / 100;
+  // where the amount is, and where its column (or row) says it should be
+  const place = (r, col, why) => {
+    const rec = misaligned.get(r) || { why: [], pos: null };
+    rec.why.push(why);
+    if (!rec.pos) {
+      const right = r.x + r.w;
+      const top = pageTop[r.page] != null ? pageTop[r.page] : null;
+      rec.pos = { page: r.page + 1, width: r2(r.w), size: r2(r.size),
+        actual: { x: r2(r.x), right: r2(right), y: r2(r.y), fromTop: top != null ? r2(top - r.y) : null },
+        expected: { x: r2(r.x), right: r2(right), y: r2(r.y), fromTop: top != null ? r2(top - r.y) : null } };
+    }
+    if (col) {
+      const anchor = col.right;
+      rec.pos.expected.right = r2(anchor);
+      rec.pos.expected.x = r2(anchor - r.w);
+      rec.pos.dx = r2(r.x + r.w - anchor);
+      rec.pos.column = { anchor: r2(anchor), amounts: col.n, spread: r2(col.spread),
+        neighbours: col.list.filter((o) => o !== r).sort((a, b) => Math.abs(a.y - r.y) - Math.abs(b.y - r.y)).slice(0, 2)
+          .map((o) => ({ text: o.str.trim(), x: r2(o.x), right: r2(o.x + o.w), y: r2(o.y) })) };
+    }
+    misaligned.set(r, rec);
+    return rec;
+  };
   amountItemsByPage.forEach((list, pi) => {
     if (!list || list.length < 5) return;
     const sorted = list.slice().sort((a, b) => (a.x + a.w) - (b.x + b.w));
@@ -278,10 +304,13 @@ async function analyze(lib, bytes, opts = {}) {
       const med = rights[Math.floor(rights.length / 2)];
       const tight = cl.filter((r) => Math.abs(r.x + r.w - med) <= 0.3).length;
       if (tight / cl.length < 0.75) continue;
-      columns.push({ right: med, n: cl.length, members: new Set(cl) });
+      const onCol = cl.filter((r) => Math.abs(r.x + r.w - med) <= 0.3);
+      const spread = Math.max(...onCol.map((r) => r.x + r.w)) - Math.min(...onCol.map((r) => r.x + r.w));
+      const col = { right: med, n: onCol.length, spread, list: onCol, members: new Set(cl) };
+      columns.push(col);
       for (const r of cl) {
         const dev = r.x + r.w - med;
-        if (Math.abs(dev) > 0.5 && Math.abs(dev) <= 8) misaligned.set(r, [`ends ${Math.abs(dev).toFixed(1)} pt ${dev > 0 ? 'right' : 'left'} of the other ${cl.length - 1} amounts in its column`]);
+        if (Math.abs(dev) > 0.5 && Math.abs(dev) <= 8) place(r, col, `ends ${Math.abs(dev).toFixed(1)} pt ${dev > 0 ? 'right' : 'left'} of the other ${col.n} amounts in its column`);
       }
     }
     // amounts that sit off every column, in a row whose other amounts line up: shifted by more than a slip
@@ -297,7 +326,7 @@ async function analyze(lib, bytes, opts = {}) {
           // the whole row moved: still off-column if every mate is off too
           if (!rowMates.every((o) => !onColumn(o))) continue;
         }
-        misaligned.set(r, [`ends ${Math.abs(near.dev).toFixed(1)} pt ${near.dev > 0 ? 'right' : 'left'} of its column, where ${near.c.n} other amounts on this page line up exactly`]);
+        place(r, near.c, `ends ${Math.abs(near.dev).toFixed(1)} pt ${near.dev > 0 ? 'right' : 'left'} of its column, where ${near.c.n} other amounts on this page line up exactly`);
       }
     }
     const pageAll = items.filter((r) => r.page === pi);
@@ -307,15 +336,25 @@ async function analyze(lib, bytes, opts = {}) {
       const ys = peers.map((o) => o.y).sort((a, b) => a - b);
       if (ys[ys.length - 1] - ys[0] > 0.15) continue;
       const d = r.y - ys[Math.floor(ys.length / 2)];
-      if (Math.abs(d) >= 0.35 && Math.abs(d) <= 2.5) { const l = misaligned.get(r) || []; l.push(`sits ${Math.abs(d).toFixed(1)} pt ${d > 0 ? 'higher' : 'lower'} than the rest of its row`); misaligned.set(r, l); }
+      if (Math.abs(d) >= 0.35 && Math.abs(d) <= 2.5) {
+        const rowY = ys[Math.floor(ys.length / 2)];
+        const rec = place(r, null, `sits ${Math.abs(d).toFixed(1)} pt ${d > 0 ? 'higher' : 'lower'} than the rest of its row`);
+        rec.pos.expected.y = r2(rowY);
+        if (pageTop[r.page] != null) rec.pos.expected.fromTop = r2(pageTop[r.page] - rowY);
+        rec.pos.dy = r2(d);
+        rec.pos.row = { y: r2(rowY), items: peers.length };
+      }
     }
   });
   let mi = 0;
-  for (const [r, why] of misaligned) {
-    if (mi++ >= 6) break;
+  for (const [r, { why, pos }] of misaligned) {
+    if (mi++ >= 12) break;
     const big = why.some((w) => { const m = /ends ([\d.]+) pt/.exec(w); return m && +m[1] > 3; });
+    const at = `x ${pos.actual.x.toFixed(2)} to ${pos.actual.right.toFixed(2)}, y ${pos.actual.y.toFixed(2)}`;
+    const should = `x ${pos.expected.x.toFixed(2)} to ${pos.expected.right.toFixed(2)}, y ${pos.expected.y.toFixed(2)}`;
     add({ code: 'MISALIGNED', severity: big ? 'high' : 'medium', page: r.page, title: `Amount out of line on page ${r.page + 1}`,
-      detail: `${q(r.str.trim())} ${why.join(' and ')}. ${big ? 'A value retyped into the page, rather than generated with it, can land visibly off its column.' : 'Generated statements line numbers up exactly; hand-placed text is usually off by a fraction of a point.'}`, evidence: { after: r.str.trim() } });
+      detail: `${q(r.str.trim())} ${why.join(' and ')}. It is drawn at ${at}; to line up it should be at ${should}${pos.column ? ` (column anchor x ${pos.column.anchor.toFixed(2)})` : ''}. ${big ? 'A value retyped into the page, rather than generated with it, can land visibly off its column.' : 'Generated statements line numbers up exactly; hand-placed text is usually off by a fraction of a point.'}`,
+      evidence: { after: r.str.trim(), position: pos } });
   }
 
   // ---- running balance arithmetic

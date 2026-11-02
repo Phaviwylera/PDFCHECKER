@@ -323,6 +323,9 @@ input[type="datetime-local"]:disabled { opacity: 0.5; }
 .em-page { margin: 14px 0 6px; font-weight: 600; font-size: 13px; }
 .em-edits { table-layout: fixed; }
 .em-edits td { overflow-wrap: anywhere; }
+.pos-table { margin-top: 8px; max-width: 560px; }
+.pos-table th:first-child { font-weight: 500; color: var(--ink); }
+.pos-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .sev { font-family: var(--font-label); font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; justify-self: start; height: max-content; margin-top: 1px; }
 .finding[data-sev="high"] .sev { background: var(--fail-bg); color: var(--fail); }
 .finding[data-sev="medium"] .sev { background: var(--warn-bg); color: var(--warn); }
@@ -463,7 +466,7 @@ details.minor[open] > summary { margin-bottom: 10px; }
 <script src="/js/mozilla-roots.js?v=7e70674824bb"></script>
 <script src="/js/samples.js?v=a05c0c071858"></script>
 <script src="/js/pdfsig-core.js?v=f135a9fd04b5"></script>
-<script src="/js/pdfsig-content.js?v=901ad8f402ba"></script>
+<script src="/js/pdfsig-content.js?v=494ea4f17210"></script>
 <script>
 (function () {
 'use strict';
@@ -822,6 +825,14 @@ function renderEvidence(ev) {
   else if (ev.before) h += `<div class="ev"><span class="lbl">Hidden</span><span class="was">${esc(ev.before)}</span></div>`;
   else if (ev.after) h += `<div class="ev"><span class="lbl">Shown</span><span class="now">${esc(ev.after)}</span></div>`;
   if (ev.text) h += `<div class="ev-line" tabindex="0">${esc(ev.text)}</div>`;
+  if (ev.position) {
+    const P = ev.position, f = (v) => (v == null ? '—' : Number(v).toFixed(2));
+    const d = (a, b) => { const v = a - b; return Math.abs(v) < 0.005 ? '<span class="sub">0</span>' : `<b>${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}</b>`; };
+    const row = (lbl, k) => `<tr><th>${lbl}</th><td class="num">${f(P.actual[k])}</td><td class="num">${f(P.expected[k])}</td><td class="num">${d(P.actual[k], P.expected[k])}</td></tr>`;
+    h += `<div class="em-scroll"><table class="em-table pos-table"><thead><tr><th>Page ${P.page} · points</th><th>Drawn at</th><th>Should be at</th><th>Off by</th></tr></thead><tbody>
+      ${row('Left edge (x)', 'x')}${row('Right edge / anchor (x)', 'right')}${row('Baseline (y, from bottom)', 'y')}${P.actual.fromTop != null ? row('Baseline (from top)', 'fromTop') : ''}</tbody></table></div>
+      <p class="pos-note">${P.column ? `Column anchor x ${f(P.column.anchor)}: ${P.column.amounts} amounts on this page end there${P.column.spread ? ` (within ${f(P.column.spread)} pt)` : ' exactly'}${P.column.neighbours.length ? `, e.g. ${P.column.neighbours.map((n) => `“${esc(n.text)}” ends at ${f(n.right)} (y ${f(n.y)})`).join(', ')}` : ''}. ` : ''}${P.row ? `Row baseline y ${f(P.row.y)}, shared by ${P.row.items} other pieces of text. ` : ''}Width ${f(P.width)} pt at ${f(P.size)} pt type. PDF points: 72 per inch, measured from the page’s bottom-left corner.</p>`;
+  }
   if (ev.expected && ev.shown) h += `<div class="ev"><span class="lbl">Should be</span><span class="was" style="text-decoration:none">${esc(ev.expected)}</span><span class="lbl">Shows</span><span class="now">${esc(ev.shown)}</span></div>`;
   return h;
 }
@@ -1184,6 +1195,15 @@ function textReport() {
       else if (ev && ev.before) L.push(`              Hidden: ${ev.before}`);
       else if (ev && ev.after) L.push(`              Shown: ${ev.after}`);
       if (ev && ev.text) L.push(`              Row: ${ev.text}`);
+      if (ev && ev.position) {
+        const P = ev.position, f = (v) => (v == null ? '-' : Number(v).toFixed(2));
+        L.push(`              Position (page ${P.page}, pt from bottom-left)     drawn at    should be`);
+        L.push(`                left edge x                         ${f(P.actual.x).padStart(9)}   ${f(P.expected.x).padStart(9)}`);
+        L.push(`                right edge / anchor x               ${f(P.actual.right).padStart(9)}   ${f(P.expected.right).padStart(9)}`);
+        L.push(`                baseline y                          ${f(P.actual.y).padStart(9)}   ${f(P.expected.y).padStart(9)}`);
+        if (P.actual.fromTop != null) L.push(`                baseline from top                   ${f(P.actual.fromTop).padStart(9)}   ${f(P.expected.fromTop).padStart(9)}`);
+        if (P.column) L.push(`              Column anchor x ${f(P.column.anchor)} (${P.column.amounts} amounts end there)${P.column.neighbours.map((n) => `; "${n.text}" ends at ${f(n.right)}`).join('')}`);
+      }
     });
     L.push('', 'Checks:');
     v.checks.forEach((c) => L.push(`  [${c.state.toUpperCase().padEnd(4)}] ${c.label}${c.note ? ': ' + c.note : ''}`));
